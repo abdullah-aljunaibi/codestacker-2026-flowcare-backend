@@ -1,0 +1,230 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// FlowCare Domain Model - Phase 1
+// Aligned to actual challenge specification
+// ============================================
+
+// User account with role-based access
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  firstName String
+  lastName  String
+  phone     String?
+  role      Role     @default(CUSTOMER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  customerProfile Customer?
+  staffProfile    Staff?
+  auditLogs       AuditLog[]
+  
+  @@index([email])
+  @@index([role])
+}
+
+enum Role {
+  ADMIN           // System administrator
+  BRANCH_MANAGER  // Branch manager
+  STAFF           // Branch staff member
+  CUSTOMER        // Customer/citizen
+}
+
+// Customer profile (extends User with CUSTOMER role)
+model Customer {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  idNumber    String?  // National ID or similar
+  dateOfBirth DateTime?
+  idImageUrl  String?  // URL/path to uploaded customer ID image (Phase 5A)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  appointments Appointment[]
+  
+  @@index([userId])
+  @@index([idNumber])
+}
+
+// Staff member (extends User with STAFF or BRANCH_MANAGER role)
+model Staff {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branchId    String
+  branch      Branch   @relation(fields: [branchId], references: [id])
+  position    String?  // Job title/position
+  employeeId  String?  // Employee identifier
+  isManager   Boolean  @default(false)  // True if BRANCH_MANAGER role
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  appointments    Appointment[]  // Appointments handled by this staff
+  slotAssignments SlotAssignment[]
+  
+  @@index([branchId])
+  @@index([userId])
+  @@index([isManager])
+}
+
+// Branch/office location
+model Branch {
+  id          String   @id @default(cuid())
+  name        String
+  code        String   @unique  // Short code for branch identification
+  address     String?
+  city        String?
+  phone       String?
+  email       String?
+  isActive    Boolean  @default(true)
+  timezone    String   @default("Asia/Muscat")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  staff         Staff[]
+  serviceTypes  ServiceType[]
+  slots         Slot[]
+  appointments  Appointment[]
+  
+  @@index([code])
+  @@index([isActive])
+}
+
+// Service type offered at a branch
+model ServiceType {
+  id          String   @id @default(cuid())
+  branchId    String
+  branch      Branch   @relation(fields: [branchId], references: [id])
+  name        String   // e.g., "License Renewal", "Document Processing"
+  code        String   // Short code
+  description String?
+  duration    Int      // Default duration in minutes
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  slots Slot[]
+  
+  @@index([branchId])
+  @@index([code])
+  @@index([isActive])
+  
+  @@unique([branchId, code])
+}
+
+// Time slot for appointments
+model Slot {
+  id              String   @id @default(cuid())
+  branchId        String
+  branch          Branch   @relation(fields: [branchId], references: [id])
+  serviceTypeId   String
+  serviceType     ServiceType @relation(fields: [serviceTypeId], references: [id])
+  startTime       DateTime
+  endTime         DateTime
+  capacity        Int      @default(1)  // How many customers can be served
+  bookedCount     Int      @default(0)  // Current bookings
+  isActive        Boolean  @default(true)
+  deletedAt       DateTime?  // Soft delete timestamp (Phase 4)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relations
+  assignments     SlotAssignment[]
+  appointments    Appointment[]
+  
+  @@index([branchId])
+  @@index([serviceTypeId])
+  @@index([startTime])
+  @@index([isActive])
+  @@index([deletedAt])
+}
+
+// Staff assignment to a slot
+model SlotAssignment {
+  id        String   @id @default(cuid())
+  slotId    String
+  slot      Slot     @relation(fields: [slotId], references: [id])
+  staffId   String
+  staff     Staff    @relation(fields: [staffId], references: [id])
+  createdAt DateTime @default(now())
+  
+  @@index([slotId])
+  @@index([staffId])
+  
+  @@unique([slotId, staffId])
+}
+
+// Appointment booking
+model Appointment {
+  id            String   @id @default(cuid())
+  branchId      String
+  branch        Branch   @relation(fields: [branchId], references: [id])
+  customerId    String
+  customer      Customer @relation(fields: [customerId], references: [id])
+  slotId        String
+  slot          Slot     @relation(fields: [slotId], references: [id])
+  staffId       String?
+  staff         Staff?   @relation(fields: [staffId], references: [id])
+  serviceTypeId String
+  status        AppointmentStatus @default(SCHEDULED)
+  notes         String?
+  attachmentUrl String?  // URL/path to optional appointment attachment (Phase 5A)
+  checkedInAt   DateTime?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  cancelledAt   DateTime?
+  cancelReason  String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  @@index([branchId])
+  @@index([customerId])
+  @@index([slotId])
+  @@index([staffId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+enum AppointmentStatus {
+  SCHEDULED    // Booked but not yet checked in
+  CHECKED_IN   // Customer arrived
+  IN_PROGRESS  // Being served
+  COMPLETED    // Service completed
+  CANCELLED    // Cancelled by customer or staff
+  NO_SHOW      // Customer didn't show up
+}
+
+// Audit log for tracking all important actions
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  action    String   // e.g., "APPOINTMENT_CREATED", "USER_LOGIN"
+  entity    String?  // e.g., "Appointment", "User"
+  entityId  String?  // ID of the affected entity
+  branchId  String?  // Branch context for visibility filtering (Phase 4)
+  metadata  Json?    // Additional context
+  ipAddress String?
+  createdAt DateTime @default(now())
+  
+  @@index([userId])
+  @@index([action])
+  @@index([entity])
+  @@index([branchId])
+  @@index([createdAt])
+}

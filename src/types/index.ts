@@ -1,0 +1,204 @@
+import { z } from 'zod';
+
+// ============================================
+// User & Auth schemas
+// ============================================
+
+export const registerSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(8),
+  firstName: z.string().min(1),
+  lastName: z.string().min(1),
+  phone: z.string().optional(),
+  role: z.enum(['ADMIN', 'BRANCH_MANAGER', 'STAFF', 'CUSTOMER']).optional(),
+});
+
+export const loginSchema = z.object({
+  email: z.string().email(),
+  password: z.string(),
+});
+
+export const updateProfileSchema = z.object({
+  firstName: z.string().min(1).optional(),
+  lastName: z.string().min(1).optional(),
+  phone: z.string().optional(),
+});
+
+export type RegisterInput = z.infer<typeof registerSchema>;
+export type LoginInput = z.infer<typeof loginSchema>;
+export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
+
+// ============================================
+// Branch schemas
+// ============================================
+
+export const createBranchSchema = z.object({
+  name: z.string().min(1),
+  code: z.string().min(1).max(10),
+  address: z.string().optional(),
+  city: z.string().optional(),
+  phone: z.string().optional(),
+  email: z.string().email().optional(),
+  timezone: z.string().default('Asia/Muscat'),
+});
+
+export const updateBranchSchema = createBranchSchema.partial();
+
+export type CreateBranchInput = z.infer<typeof createBranchSchema>;
+export type UpdateBranchInput = z.infer<typeof updateBranchSchema>;
+
+// ============================================
+// Service Type schemas
+// ============================================
+
+export const createServiceTypeSchema = z.object({
+  branchId: z.string(),
+  name: z.string().min(1),
+  code: z.string().min(1).max(10),
+  description: z.string().optional(),
+  duration: z.number().int().positive(),
+});
+
+export const updateServiceTypeSchema = createServiceTypeSchema.partial();
+
+export type CreateServiceTypeInput = z.infer<typeof createServiceTypeSchema>;
+export type UpdateServiceTypeInput = z.infer<typeof updateServiceTypeSchema>;
+
+// ============================================
+// Staff schemas
+// ============================================
+
+export const createStaffSchema = z.object({
+  userId: z.string(),
+  branchId: z.string(),
+  position: z.string().optional(),
+  employeeId: z.string().optional(),
+  isManager: z.boolean().default(false),
+});
+
+export const updateStaffSchema = createStaffSchema.partial();
+
+export type CreateStaffInput = z.infer<typeof createStaffSchema>;
+export type UpdateStaffInput = z.infer<typeof updateStaffSchema>;
+
+// ============================================
+// Customer schemas
+// ============================================
+
+export const createCustomerSchema = z.object({
+  userId: z.string(),
+  idNumber: z.string().optional(),
+  dateOfBirth: z.string().datetime().optional(),
+  idImageUrl: z.string().optional(),
+});
+
+export const updateCustomerSchema = createCustomerSchema.partial();
+
+export type CreateCustomerInput = z.infer<typeof createCustomerSchema>;
+export type UpdateCustomerInput = z.infer<typeof updateCustomerSchema>;
+
+// ============================================
+// Slot schemas
+// ============================================
+
+export const createSlotSchema = z.object({
+  branchId: z.string(),
+  serviceTypeId: z.string(),
+  startTime: z.string().datetime(),
+  endTime: z.string().datetime(),
+  capacity: z.number().int().positive().default(1),
+});
+
+export const updateSlotSchema = createSlotSchema.partial();
+
+export type CreateSlotInput = z.infer<typeof createSlotSchema>;
+export type UpdateSlotInput = z.infer<typeof updateSlotSchema>;
+
+// ============================================
+// Slot Assignment schemas
+// ============================================
+
+export const assignStaffToSlotSchema = z.object({
+  slotId: z.string(),
+  staffId: z.string(),
+});
+
+export type AssignStaffToSlotInput = z.infer<typeof assignStaffToSlotSchema>;
+
+// ============================================
+// Appointment schemas
+// ============================================
+
+export const createAppointmentSchema = z.object({
+  branchId: z.string(),
+  customerId: z.string().optional(),
+  slotId: z.string(),
+  staffId: z.string().optional(),
+  serviceTypeId: z.string(),
+  notes: z.string().optional(),
+  attachmentUrl: z.string().optional(),
+});
+
+export const updateAppointmentSchema = z.object({
+  status: z.enum(['SCHEDULED', 'CHECKED_IN', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'NO_SHOW']).optional(),
+  notes: z.string().optional(),
+  cancelReason: z.string().optional(),
+  checkedInAt: z.string().datetime().optional(),
+  startedAt: z.string().datetime().optional(),
+  completedAt: z.string().datetime().optional(),
+  cancelledAt: z.string().datetime().optional(),
+});
+
+export const checkInAppointmentSchema = z.object({
+  appointmentId: z.string(),
+});
+
+export type CreateAppointmentInput = z.infer<typeof createAppointmentSchema>;
+export type UpdateAppointmentInput = z.infer<typeof updateAppointmentSchema>;
+export type CheckInAppointmentInput = z.infer<typeof checkInAppointmentSchema>;
+
+// ============================================
+// Query parameter schemas
+// ============================================
+
+export const paginationSchema = z.object({
+  page: z.number().int().positive().default(1),
+  limit: z.number().int().positive().default(10),
+});
+
+export const dateRangeSchema = z.object({
+  startDate: z.string().datetime().optional(),
+  endDate: z.string().datetime().optional(),
+});
+
+export type PaginationInput = z.infer<typeof paginationSchema>;
+export type DateRangeInput = z.infer<typeof dateRangeSchema>;
+
+// ============================================
+// Response types
+// ============================================
+
+export interface ApiResponse<T = unknown> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  message?: string;
+}
+
+export interface JwtPayload {
+  customerId?: string;
+  branchId?: string;
+  userId: string;
+  email: string;
+  role: string;
+}
+
+export interface PaginatedResponse<T> {
+  data: T[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
