@@ -262,11 +262,12 @@ function assertAppointmentReadAccess(req: Request, appointment: NonNullable<Appo
     throw new ApiError(403, 'Access denied: You can only access your own appointments');
   }
 
-  if (
-    (req.user?.role === 'BRANCH_MANAGER' || req.user?.role === 'STAFF') &&
-    appointment.branchId !== req.user.branchId
-  ) {
+  if (req.user?.role === 'BRANCH_MANAGER' && appointment.branchId !== req.user.branchId) {
     throw new ApiError(403, 'Access denied: Cannot access appointments outside your branch');
+  }
+
+  if (req.user?.role === 'STAFF' && appointment.staffId !== req.user.staffId) {
+    throw new ApiError(403, 'Access denied: Staff can only access appointments assigned to them');
   }
 }
 
@@ -368,8 +369,10 @@ router.get('/', async (req: Request, res: Response) => {
         throw new ApiError(403, 'Customer profile not found');
       }
       whereClause.customerId = req.user.customerId;
-    } else if (req.user?.role === 'BRANCH_MANAGER' || req.user?.role === 'STAFF') {
+    } else if (req.user?.role === 'BRANCH_MANAGER') {
       whereClause.branchId = req.user.branchId;
+    } else if (req.user?.role === 'STAFF') {
+      whereClause.staffId = req.user.staffId;
     }
 
     const normalizedStatus = normalizeStatusInput(status as string | undefined);

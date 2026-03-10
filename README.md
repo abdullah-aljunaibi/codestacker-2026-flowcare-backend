@@ -10,7 +10,7 @@ This service manages:
 - customer registration with ID image upload
 - appointment booking, rescheduling, cancellation, and staff workflow updates
 - explicit slot-level staff assignment and unassignment endpoints
-- branch-scoped staff and manager access control
+- branch-scoped manager access control and assigned-only staff appointment visibility
 - slot soft-delete and retention cleanup
 - audit logging and CSV export
 
@@ -158,6 +158,13 @@ curl -X PATCH http://localhost:3000/api/appointments/APPOINTMENT_ID \
   -H "Content-Type: application/json" \
   -d '{"status":"SERVING"}'
 ```
+
+Appointment visibility rules:
+
+- Admin sees all appointments
+- Branch Manager sees appointments in their assigned branch
+- Staff sees only appointments where `appointment.staffId === req.user.staffId`
+- Customer sees only their own appointments
 
 Upload or replace an attachment on an existing appointment with the legacy helper route:
 

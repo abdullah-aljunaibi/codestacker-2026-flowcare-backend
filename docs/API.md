@@ -66,9 +66,9 @@ curl -X POST http://localhost:3000/api/auth/register \
 
 | Method | Path | Auth | Notes |
 | --- | --- | --- | --- |
-| `GET` | `/api/appointments` | Any authenticated user | Customers see own, staff/managers see branch, admin sees all |
+| `GET` | `/api/appointments` | Any authenticated user | Customers see own, staff see assigned-to-me only, managers see assigned branch, admin sees all |
 | `POST` | `/api/appointments` | Customer, Staff, Branch Manager, Admin | Primary booking contract. Accepts `multipart/form-data`, reads text fields from `req.body`, and accepts optional `attachment` in `req.file` |
-| `GET` | `/api/appointments/:id` | Any authenticated user with access | Customers own only; staff/managers branch scoped |
+| `GET` | `/api/appointments/:id` | Any authenticated user with access | Customers own only; staff assigned-only; managers branch scoped |
 | `PATCH` | `/api/appointments/:id` | Any authenticated user with access | Reschedule with `slotId`, update notes, or update status |
 | `DELETE` | `/api/appointments/:id` | Any authenticated user with access | Cancel appointment record |
 
