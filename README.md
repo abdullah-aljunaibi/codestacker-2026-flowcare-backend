@@ -1,396 +1,205 @@
-# FlowCare Queue & Appointment Booking System
+# FlowCare Backend
 
-Backend API for FlowCare's queue and appointment booking platform — built for the Rihal Codestacker 2026 Backend Challenge.
+Node.js/Express/Prisma backend for the FlowCare queue and appointment booking system.
 
-## Tech Stack
+## Project Overview
 
-- **Runtime:** Node.js + TypeScript
-- **Framework:** Express.js
-- **Database:** PostgreSQL 16
-- **ORM:** Prisma 6
-- **Auth:** JWT (Bearer tokens)
-- **File Storage:** Local filesystem
-- **Build:** esbuild
+This service manages:
 
-## Setup Instructions
+- branch and service discovery
+- customer registration with ID image upload
+- appointment booking, rescheduling, cancellation, and staff workflow updates
+- branch-scoped staff/manager access control
+- slot soft-delete and retention cleanup
+- audit logging and CSV export
 
-### Prerequisites
+Authentication uses HTTP Basic Auth on protected routes. Startup bootstrapping imports `prisma/seed-data.json` idempotently and guarantees a default admin user exists.
 
-- Node.js 18+
-- PostgreSQL 16 (or Docker)
-- Git
+## Stack
 
-### 1. Clone & Install
+- Node.js + TypeScript
+- Express
+- Prisma ORM
+- PostgreSQL
+- Local filesystem uploads
+- esbuild for production bundling
+
+## Setup
+
+1. Install dependencies:
 
 ```bash
-git clone https://github.com/abdullah-aljunaibi/codestacker-2026-flowcare-backend.git
-cd codestacker-2026-flowcare-backend
 npm install
 ```
 
-### 2. Environment Variables
-
-Create a `.env` file in the project root:
+2. Create `.env`:
 
 ```env
 DATABASE_URL="postgresql://postgres:password@localhost:5432/flowcare?schema=public"
-JWT_SECRET="your-secret-key-change-in-production"
 PORT=3000
+ALLOWED_ORIGINS=http://localhost:3000
 ```
 
-### 3. Start PostgreSQL
-
-Using Docker:
-
-```bash
-docker run --name flowcare-db -e POSTGRES_PASSWORD=password -p 5432:5432 -d postgres:16
-```
-
-Or use an existing PostgreSQL instance and update `DATABASE_URL` accordingly.
-
-### 4. Run Migrations
+3. Apply schema:
 
 ```bash
 npx prisma migrate deploy
 ```
 
-### 5. Seed the Database
+4. Start the API in development mode:
 
 ```bash
-npm run db:seed
+npm run dev
 ```
 
-Seeding is **idempotent** — running it multiple times will not duplicate data.
+The app bootstraps seed data automatically on startup. You can also regenerate Prisma Client manually with `npx prisma generate`.
 
-Seed creates:
-- 1 Admin user
-- 2 Branches (Muscat, Salalah)
-- 2 Branch Managers
-- 6 Service Types (3 per branch)
-- 6 Staff members (3 per branch)
-- 5 Customers
-- 144 Time Slots (next 3 days)
-- 1 Sample Appointment
+## Default Admin Credentials
 
-**Default password for all users:** `password123`
+- Email: `admin@flowcare.com`
+- Password: `admin123`
 
-### 6. Build & Start
+## Basic Auth Usage
+
+Use curl’s `-u` flag on protected routes:
 
 ```bash
-npm run build
-npm start
+curl -u admin@flowcare.com:admin123 http://localhost:3000/api/audit
 ```
 
-Server starts at `http://localhost:3000` (or the port specified in `.env`).
+You can also validate credentials explicitly:
 
----
+```bash
+curl -X POST -u admin@flowcare.com:admin123 http://localhost:3000/api/auth/login
+```
 
-## API Documentation
+## API Quick Examples
 
-### Health Check
+Health check:
 
 ```bash
 curl http://localhost:3000/health
 ```
 
----
+Register a customer with an ID image:
 
-### Public Endpoints (No Authentication)
+```bash
+curl -X POST http://localhost:3000/api/auth/register \
+  -F email=customer@example.com \
+  -F password=password123 \
+  -F firstName=Jane \
+  -F lastName=Doe \
+  -F phone=+15550000000 \
+  -F idNumber=ID-123456 \
+  -F dateOfBirth=1995-05-20 \
+  -F idImage=@/absolute/path/to/id-card.png
+```
 
-#### List Branches
+List public branches:
 
 ```bash
 curl http://localhost:3000/api/branches
 ```
 
-#### List Service Types
+List public slots for a branch and service:
 
 ```bash
-# All service types
-curl http://localhost:3000/api/service-types
-
-# Filter by branch
-curl "http://localhost:3000/api/service-types?branchId=BRANCH_ID"
+curl "http://localhost:3000/api/slots?branchId=BRANCH_ID&serviceTypeId=SERVICE_TYPE_ID&available=true"
 ```
 
-#### List Available Slots
-
-```bash
-# All slots
-curl http://localhost:3000/api/slots
-
-# Filter by branch, service type, and date
-curl "http://localhost:3000/api/slots?branchId=BRANCH_ID&serviceTypeId=SERVICE_TYPE_ID&date=2026-03-10"
-```
-
----
-
-### Authentication
-
-#### Register Customer
-
-```bash
-curl -X POST http://localhost:3000/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "customer@example.com",
-    "password": "password123",
-    "firstName": "John",
-    "lastName": "Doe",
-    "role": "CUSTOMER"
-  }'
-```
-
-A Customer profile is automatically created during registration.
-
-#### Login
-
-```bash
-curl -X POST http://localhost:3000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "admin@flowcare.com",
-    "password": "password123"
-  }'
-```
-
-Returns a JWT token. Use it in subsequent requests:
-
-```
-Authorization: Bearer <token>
-```
-
----
-
-### Customer Endpoints (Authenticated)
-
-#### Book Appointment
+Book an appointment as a customer:
 
 ```bash
 curl -X POST http://localhost:3000/api/appointments \
+  -u customer@example.com:password123 \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
   -d '{
     "slotId": "SLOT_ID",
-    "branchId": "BRANCH_ID",
-    "serviceTypeId": "SERVICE_TYPE_ID",
     "notes": "First visit"
   }'
 ```
 
-`customerId` is auto-filled from the JWT token for customers.
-
-#### List My Appointments
-
-```bash
-curl http://localhost:3000/api/appointments \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-#### Cancel Appointment
-
-```bash
-curl -X DELETE http://localhost:3000/api/appointments/APPOINTMENT_ID \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-#### Reschedule Appointment
+Reschedule an appointment:
 
 ```bash
 curl -X PATCH http://localhost:3000/api/appointments/APPOINTMENT_ID \
+  -u customer@example.com:password123 \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"slotId": "NEW_SLOT_ID"}'
-```
-
----
-
-### Staff Endpoints (Authenticated)
-
-#### Update Appointment Status
-
-```bash
-curl -X PATCH http://localhost:3000/api/appointments/APPOINTMENT_ID \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"status": "CHECKED_IN"}'
-```
-
-Supported statuses: `SCHEDULED`, `CHECKED_IN`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED`, `NO_SHOW`
-
----
-
-### Admin / Manager Endpoints (Authenticated)
-
-#### Create Slot
-
-```bash
-curl -X POST http://localhost:3000/api/slots \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
   -d '{
-    "branchId": "BRANCH_ID",
-    "serviceTypeId": "SERVICE_TYPE_ID",
-    "startTime": "2026-03-15T09:00:00Z",
-    "endTime": "2026-03-15T10:00:00Z",
-    "capacity": 1
+    "slotId": "NEW_SLOT_ID"
   }'
 ```
 
-#### Soft Delete Slot
+Update workflow status as assigned staff:
 
 ```bash
-curl -X DELETE http://localhost:3000/api/slots/SLOT_ID \
-  -H "Authorization: Bearer $TOKEN"
+curl -X PATCH http://localhost:3000/api/appointments/APPOINTMENT_ID \
+  -u staff1.mct-001@flowcare.com:password123 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "status": "SERVING"
+  }'
 ```
 
-#### Restore Soft-Deleted Slot
+Set branch retention configuration as admin:
 
 ```bash
-curl -X POST http://localhost:3000/api/slots/SLOT_ID/restore \
-  -H "Authorization: Bearer $TOKEN"
+curl -X PUT http://localhost:3000/api/retention-config \
+  -u admin@flowcare.com:admin123 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "branchId": "BRANCH_ID",
+    "retentionDays": 45
+  }'
 ```
 
-#### Retention Preview
+Run retention cleanup:
 
 ```bash
-curl "http://localhost:3000/api/slots/retention-preview?days=30" \
-  -H "Authorization: Bearer $TOKEN"
+curl -X POST http://localhost:3000/api/slots/cleanup-retention \
+  -u admin@flowcare.com:admin123
 ```
 
-#### Retention Cleanup (Hard Delete)
+Export audit logs:
 
 ```bash
-curl -X POST "http://localhost:3000/api/slots/cleanup-retention?days=30" \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-#### View Audit Logs
-
-```bash
-curl http://localhost:3000/api/audit \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-#### Export Audit Logs as CSV
-
-```bash
-curl http://localhost:3000/api/audit/export \
-  -H "Authorization: Bearer $TOKEN" \
+curl -u admin@flowcare.com:admin123 \
+  http://localhost:3000/api/audit/export \
   -o audit-logs.csv
 ```
 
----
+Full endpoint documentation is in `docs/API.md`.
 
-### File Upload & Retrieval
+## Error Response Format
 
-#### Upload Customer ID Image
+All JSON errors use this shape:
+
+```json
+{
+  "success": false,
+  "error": "Human readable message",
+  "details": []
+}
+```
+
+`details` is optional and only included for validation-style failures.
+
+## Architecture Overview
+
+- `src/index.ts`: Express bootstrap, route registration, startup seed import, global handlers
+- `src/middleware/auth.ts`: Basic Auth parsing, authentication, RBAC helpers
+- `src/routes/*`: Route modules grouped by domain
+- `src/utils/audit-logger.ts`: audit trail writes with branch-aware context
+- `src/utils/retention-config.ts`: DB-backed retention resolution
+- `src/bootstrap/seed.ts`: idempotent startup bootstrap from `prisma/seed-data.json`
+- `prisma/schema.prisma`: relational schema
+- `prisma/migrations/*`: deployable SQL migrations
+
+## Verification
+
+These commands pass in the current repository state:
 
 ```bash
-curl -X POST http://localhost:3000/api/uploads/customer-id \
-  -H "Authorization: Bearer $TOKEN" \
-  -F "customerIdImage=@/path/to/id-photo.jpg"
+npx tsc --noEmit
+npm run build
 ```
-
-#### Upload Appointment Attachment
-
-```bash
-curl -X POST http://localhost:3000/api/uploads/appointment-attachment \
-  -H "Authorization: Bearer $TOKEN" \
-  -F "appointmentAttachment=@/path/to/document.pdf" \
-  -F "appointmentId=APPOINTMENT_ID"
-```
-
-#### Retrieve Customer ID Image (Admin Only)
-
-```bash
-curl http://localhost:3000/api/files/customer-id/CUSTOMER_ID \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-#### Retrieve Appointment Attachment
-
-```bash
-curl http://localhost:3000/api/files/appointment/APPOINTMENT_ID/attachment \
-  -H "Authorization: Bearer $TOKEN"
-```
-
----
-
-## Roles & Permissions
-
-| Role | Scope | Key Permissions |
-|------|-------|----------------|
-| **Admin** | System-wide | Full access to all branches, slots, appointments, audit logs, file retrieval |
-| **Branch Manager** | Branch-scoped | Manage slots, staff, appointments within assigned branch |
-| **Staff** | Branch-scoped | View schedule, update appointment status |
-| **Customer** | Own data | Book/cancel/reschedule own appointments, upload files |
-
----
-
-## Database Schema
-
-### Models
-
-- **User** — Authentication, roles (ADMIN, BRANCH_MANAGER, STAFF, CUSTOMER)
-- **Customer** — Customer profile, ID image reference
-- **Staff** — Staff profile, branch assignment
-- **Branch** — Service locations
-- **ServiceType** — Services offered per branch
-- **Slot** — Available time slots with soft delete support
-- **SlotAssignment** — Staff-to-slot assignments
-- **Appointment** — Bookings with status tracking
-- **AuditLog** — Action audit trail
-
-### ERD
-
-Run `npx prisma studio` to explore the schema visually.
-
----
-
-## Project Structure
-
-```
-src/
-├── index.ts              # Express app setup, route mounting
-├── middleware/
-│   └── auth.ts           # JWT auth, role, ownership middleware
-├── routes/
-│   ├── auth.ts           # Register, login
-│   ├── branches.ts       # Branch CRUD
-│   ├── service-types.ts  # Service type CRUD
-│   ├── slots.ts          # Slot CRUD, soft delete, retention
-│   ├── appointments.ts   # Booking, cancel, reschedule
-│   ├── staff.ts          # Staff management
-│   ├── customers.ts      # Customer management
-│   ├── audit.ts          # Audit logs + CSV export
-│   ├── uploads.ts        # File upload + retrieval
-│   └── queue.ts          # Queue endpoints (placeholder)
-├── types/
-│   └── index.ts          # Zod schemas, TypeScript types
-└── utils/
-    ├── jwt.ts            # Token generation/verification
-    └── audit-logger.ts   # Audit logging utility
-prisma/
-├── schema.prisma         # Database schema
-├── seed.ts               # Idempotent seed script
-└── migrations/           # Database migrations
-```
-
----
-
-## Seed Accounts
-
-| Role | Email | Password |
-|------|-------|----------|
-| Admin | admin@flowcare.com | password123 |
-| Branch Manager (Muscat) | manager.mct-001@flowcare.com | password123 |
-| Branch Manager (Salalah) | manager.sll-001@flowcare.com | password123 |
-| Staff | staff1.mct-001@flowcare.com | password123 |
-| Customer | customer1@example.com | password123 |
-
----
-
-## Author
-
-Abdullah Al Junaibi — Rihal Codestacker 2026
