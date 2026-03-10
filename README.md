@@ -10,11 +10,11 @@ This service manages:
 - customer registration with ID image upload
 - appointment booking, rescheduling, cancellation, and staff workflow updates
 - explicit slot-level staff assignment and unassignment endpoints
-- branch-scoped staff/manager access control
+- branch-scoped staff and manager access control
 - slot soft-delete and retention cleanup
 - audit logging and CSV export
 
-Authentication uses HTTP Basic Auth on protected routes. Startup bootstrapping imports `prisma/seed-data.json` idempotently and guarantees a default admin user exists.
+Protected routes use HTTP Basic Authentication. Startup bootstrapping imports `prisma/seed-data.json` idempotently and guarantees a default admin user exists.
 
 ## Stack
 
@@ -60,9 +60,9 @@ The app bootstraps seed data automatically on startup. You can also regenerate P
 - Email: `admin@flowcare.com`
 - Password: `admin123`
 
-## Basic Auth Usage
+## Basic Authentication
 
-Use curl’s `-u` flag on protected routes:
+Use curl's `-u` flag on protected routes:
 
 ```bash
 curl -u admin@flowcare.com:admin123 http://localhost:3000/api/audit
@@ -122,7 +122,7 @@ curl -u admin@flowcare.com:admin123 \
   "http://localhost:3000/api/slots/admin-view?includeDeleted=true"
 ```
 
-Book an appointment as a customer, with the optional attachment on the same route:
+Book an appointment with an optional attachment on the same route:
 
 ```bash
 curl -X POST http://localhost:3000/api/appointments \
@@ -132,7 +132,7 @@ curl -X POST http://localhost:3000/api/appointments \
   -F attachment=@/absolute/path/to/supporting-document.pdf
 ```
 
-Booking without an attachment uses the same route and contract:
+Book an appointment without an attachment:
 
 ```bash
 curl -X POST http://localhost:3000/api/appointments \
@@ -147,9 +147,7 @@ Reschedule an appointment:
 curl -X PATCH http://localhost:3000/api/appointments/APPOINTMENT_ID \
   -u customer@example.com:password123 \
   -H "Content-Type: application/json" \
-  -d '{
-    "slotId": "NEW_SLOT_ID"
-  }'
+  -d '{"slotId":"NEW_SLOT_ID"}'
 ```
 
 Update workflow status as assigned staff:
@@ -158,9 +156,16 @@ Update workflow status as assigned staff:
 curl -X PATCH http://localhost:3000/api/appointments/APPOINTMENT_ID \
   -u staff1.mct-001@flowcare.com:password123 \
   -H "Content-Type: application/json" \
-  -d '{
-    "status": "SERVING"
-  }'
+  -d '{"status":"SERVING"}'
+```
+
+Upload or replace an attachment on an existing appointment with the legacy helper route:
+
+```bash
+curl -X POST http://localhost:3000/api/uploads/appointment-attachment \
+  -u customer@example.com:password123 \
+  -F appointmentId=APPOINTMENT_ID \
+  -F appointmentAttachment=@/absolute/path/to/supporting-document.pdf
 ```
 
 Set branch retention configuration as admin:
@@ -169,10 +174,7 @@ Set branch retention configuration as admin:
 curl -X PUT http://localhost:3000/api/retention-config \
   -u admin@flowcare.com:admin123 \
   -H "Content-Type: application/json" \
-  -d '{
-    "branchId": "BRANCH_ID",
-    "retentionDays": 45
-  }'
+  -d '{"branchId":"BRANCH_ID","retentionDays":45}'
 ```
 
 Run retention cleanup:
@@ -188,9 +190,7 @@ Assign staff to a slot:
 curl -X POST http://localhost:3000/api/slots/SLOT_ID/assign-staff \
   -u admin@flowcare.com:admin123 \
   -H "Content-Type: application/json" \
-  -d '{
-    "staffId": "STAFF_ID"
-  }'
+  -d '{"staffId":"STAFF_ID"}'
 ```
 
 Remove staff from a slot:
@@ -229,13 +229,13 @@ All JSON errors use this shape:
 ## Architecture Overview
 
 - `src/index.ts`: Express bootstrap, route registration, startup seed import, global handlers
-- `src/middleware/auth.ts`: Basic Auth parsing, authentication, RBAC helpers
+- `src/middleware/auth.ts`: Basic Authentication parsing, authentication, and RBAC helpers
 - `src/routes/*`: Route modules grouped by domain
 - `src/utils/audit-logger.ts`: audit trail writes with branch-aware context
 - `src/utils/retention-config.ts`: DB-backed retention resolution
 - `src/bootstrap/seed.ts`: idempotent startup bootstrap from `prisma/seed-data.json`
 - `prisma/schema.prisma`: relational schema
-- `prisma/migrations/*`: deployable SQL migrations
+- `prisma/migrations/*`: deployable SQL migrations when present in the repository snapshot
 
 Staff assignment is slot-level only. A `SlotAssignment` links a staff member to one concrete slot; service types do not have separate assignment records.
 

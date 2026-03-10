@@ -6,7 +6,6 @@ import { bootstrapDatabase } from './bootstrap/seed.js';
 // Route imports
 import authRoutes from './routes/auth.js';
 import appointmentRoutes from './routes/appointments.js';
-import queueRoutes from './routes/queue.js';
 import branchRoutes from './routes/branches.js';
 import serviceTypeRoutes from './routes/service-types.js';
 import slotRoutes from './routes/slots.js';
@@ -53,7 +52,6 @@ app.get('/health', (req, res) => {
 // API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/appointments', appointmentRoutes);
-app.use('/api/queue', queueRoutes);
 app.use('/api/branches', branchRoutes);
 app.use('/api/service-types', serviceTypeRoutes);
 app.use('/api/slots', slotRoutes);

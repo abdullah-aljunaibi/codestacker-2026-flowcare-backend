@@ -115,7 +115,7 @@ router.post('/register', upload.single('idImage'), handleMulterError, async (req
           idImageUrl: customer.idImageUrl,
         },
       },
-      message: 'Registration successful. Use Basic Auth with your email and password on protected routes.',
+      message: 'Registration successful. Use HTTP Basic Authentication with your email and password on protected routes.',
     });
   } catch (error) {
     removeUploadedFile(req.file?.path);
@@ -127,7 +127,7 @@ router.post('/register', upload.single('idImage'), handleMulterError, async (req
   }
 });
 
-// POST /api/auth/login - Basic Auth credential validation endpoint
+// POST /api/auth/login - HTTP Basic Authentication credential validation endpoint
 router.post('/login', async (req: Request, res: Response) => {
   const credentials = parseBasicAuthHeader(req.headers.authorization);
   const ipAddress = getIpAddressFromRequest(req);
@@ -201,7 +201,7 @@ router.post('/login', async (req: Request, res: Response) => {
         staffId: authenticatedUser.staffId,
       },
     },
-    message: 'Credentials are valid. Use the same Basic Auth header on protected routes.',
+    message: 'Credentials are valid. Use the same HTTP Basic Authentication header on protected routes.',
   });
 });
 

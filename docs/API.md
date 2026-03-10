@@ -2,7 +2,7 @@
 
 Base URL: `http://localhost:3000`
 
-Protected routes use HTTP Basic Auth:
+Protected routes use HTTP Basic Authentication:
 
 ```bash
 curl -u admin@flowcare.com:admin123 http://localhost:3000/api/audit
@@ -40,7 +40,7 @@ Error JSON responses:
 | `GET` | `/api/service-types` | Public | List service types; optional `branchId`, `isActive` |
 | `GET` | `/api/slots` | Public | List public slots; optional `branchId`, `serviceTypeId`, `startDate`, `endDate`, `available`; never returns soft-deleted rows |
 | `POST` | `/api/auth/register` | Public | Register customer with multipart ID image |
-| `POST` | `/api/auth/login` | Public | Validate Basic Auth credentials and record login attempt |
+| `POST` | `/api/auth/login` | Public | Validate Basic Authentication credentials and record login attempt |
 
 Example login:
 
@@ -68,9 +68,9 @@ curl -X POST http://localhost:3000/api/auth/register \
 | --- | --- | --- | --- |
 | `GET` | `/api/appointments` | Any authenticated user | Customers see own, staff/managers see branch, admin sees all |
 | `POST` | `/api/appointments` | Customer, Staff, Branch Manager, Admin | Primary booking contract. Accepts `multipart/form-data`, reads text fields from `req.body`, and accepts optional `attachment` in `req.file` |
-| `GET` | `/api/appointments/:id` | Scoped | Customers own only; staff/manager branch scoped |
-| `PATCH` | `/api/appointments/:id` | Scoped | Reschedule with `slotId`, update notes, or update status |
-| `DELETE` | `/api/appointments/:id` | Scoped | Soft-cancel appointment record |
+| `GET` | `/api/appointments/:id` | Any authenticated user with access | Customers own only; staff/managers branch scoped |
+| `PATCH` | `/api/appointments/:id` | Any authenticated user with access | Reschedule with `slotId`, update notes, or update status |
+| `DELETE` | `/api/appointments/:id` | Any authenticated user with access | Cancel appointment record |
 
 Book with no attachment:
 
@@ -124,7 +124,7 @@ curl -X PATCH http://localhost:3000/api/appointments/APPOINTMENT_ID \
 | --- | --- | --- | --- |
 | `GET` | `/api/branches` | Public | Optional `isActive=true|false` |
 | `POST` | `/api/branches` | Admin | Create branch |
-| `GET` | `/api/branches/:id` | Authenticated | Staff/managers limited to own branch |
+| `GET` | `/api/branches/:id` | Any authenticated user with access | Staff/managers limited to own branch |
 | `PATCH` | `/api/branches/:id` | Admin, Branch Manager | Managers limited to own branch |
 | `DELETE` | `/api/branches/:id` | Admin | Delete branch |
 
@@ -143,7 +143,7 @@ curl -X POST http://localhost:3000/api/branches \
 | --- | --- | --- | --- |
 | `GET` | `/api/service-types` | Public | Optional `branchId`, `isActive` |
 | `POST` | `/api/service-types` | Admin, Branch Manager | Managers limited to own branch |
-| `GET` | `/api/service-types/:id` | Authenticated | Branch-scoped for managers/staff |
+| `GET` | `/api/service-types/:id` | Any authenticated user with access | Branch-scoped for managers/staff |
 | `PATCH` | `/api/service-types/:id` | Admin, Branch Manager | Branch-scoped |
 | `DELETE` | `/api/service-types/:id` | Admin, Branch Manager | Branch-scoped |
 
@@ -158,7 +158,7 @@ curl -X POST http://localhost:3000/api/branches \
 | `POST` | `/api/slots/cleanup-retention` | Admin | Deletes soft-deleted slots based on DB retention config |
 | `GET` | `/api/slots/retention-preview` | Admin | Preview retention cleanup |
 | `POST` | `/api/slots/:id/assign-staff` | Admin, Branch Manager | Explicitly assign a staff member to a slot; managers limited to own branch; staff must belong to the slot branch; duplicate assignment is idempotent |
-| `GET` | `/api/slots/:id` | Authenticated | Admin can include deleted slots with `includeDeleted=true` |
+| `GET` | `/api/slots/:id` | Any authenticated user with access | Admin can include deleted slots with `includeDeleted=true` |
 | `PATCH` | `/api/slots/:id` | Admin, Branch Manager | Update slot |
 | `DELETE` | `/api/slots/:id` | Admin, Branch Manager | Soft-delete slot |
 | `DELETE` | `/api/slots/:id/assign-staff/:staffId` | Admin, Branch Manager | Explicitly remove a staff assignment from a slot; managers limited to own branch |
@@ -203,18 +203,27 @@ Staff assignment scope is slot-level only. The API stores assignments in `SlotAs
 
 | Method | Path | Auth | Notes |
 | --- | --- | --- | --- |
-| `GET` | `/api/customers` | Authenticated | Customers see own profile; staff/managers see branch-related customers |
-| `POST` | `/api/customers` | Authenticated | Create customer profile |
-| `GET` | `/api/customers/:id` | Authenticated | Scoped by role |
-| `PATCH` | `/api/customers/:id` | Authenticated | Scoped by role |
+| `GET` | `/api/customers` | Any authenticated user | Customers see own profile; staff/managers see branch-related customers |
+| `POST` | `/api/customers` | Any authenticated user | Create customer profile |
+| `GET` | `/api/customers/:id` | Any authenticated user with access | Scoped by role |
+| `PATCH` | `/api/customers/:id` | Any authenticated user with access | Scoped by role |
 
 ## Uploads and Private Files
 
 | Method | Path | Auth | Notes |
 | --- | --- | --- | --- |
 | `GET` | `/api/files/customer-id/:customerId` | Admin | Retrieve stored customer ID image |
-| `GET` | `/api/files/appointment/:appointmentId/attachment` | Scoped | Customer owns appointment, or branch staff/manager, or admin |
-| `POST` | `/api/uploads/appointment-attachment` | Scoped | Legacy helper route; supported, but `POST /api/appointments` is the primary contract for booking with an attachment |
+| `GET` | `/api/files/appointment/:appointmentId/attachment` | Any authenticated user with access | Customer owns appointment, or branch staff/manager, or admin |
+| `POST` | `/api/uploads/appointment-attachment` | Any authenticated user with access | Legacy helper route; supported, but `POST /api/appointments` is the primary contract for booking with an attachment |
+
+Legacy helper upload example:
+
+```bash
+curl -X POST http://localhost:3000/api/uploads/appointment-attachment \
+  -u customer@example.com:password123 \
+  -F appointmentId=APPOINTMENT_ID \
+  -F appointmentAttachment=@/absolute/path/to/supporting-document.pdf
+```
 
 ## Audit
 
@@ -246,14 +255,3 @@ curl -X PUT http://localhost:3000/api/retention-config \
   -H "Content-Type: application/json" \
   -d '{"branchId":"BRANCH_ID","retentionDays":45}'
 ```
-
-## Queue
-
-The queue endpoints are present but currently return `501 Not Implemented`:
-
-| Method | Path |
-| --- | --- |
-| `GET` | `/api/queue/status` |
-| `POST` | `/api/queue/join` |
-| `GET` | `/api/queue/my-status` |
-| `POST` | `/api/queue/leave` |
