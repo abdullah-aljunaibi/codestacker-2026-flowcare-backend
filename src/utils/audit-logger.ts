@@ -8,6 +8,8 @@ export type AuditAction =
   | 'APPOINTMENT_RESCHEDULED'
   | 'APPOINTMENT_CANCELLED'
   | 'APPOINTMENT_STATUS_CHANGED'
+  | 'AUTH_LOGIN_SUCCEEDED'
+  | 'AUTH_LOGIN_FAILED'
   | 'SLOT_CREATED'
   | 'SLOT_UPDATED'
   | 'SLOT_DELETED'
@@ -16,14 +18,21 @@ export type AuditAction =
   | 'STAFF_ASSIGNED'
   | 'STAFF_UNASSIGNED'
   | 'STAFF_ASSIGNMENT_CHANGED'
-  | 'USER_LOGIN'
   | 'USER_REGISTERED'
+  | 'BRANCH_CREATED'
+  | 'BRANCH_UPDATED'
+  | 'BRANCH_DELETED'
+  | 'SERVICE_TYPE_CREATED'
+  | 'SERVICE_TYPE_UPDATED'
+  | 'SERVICE_TYPE_DELETED'
   | 'CUSTOMER_ID_ACCESSED'
   | 'CUSTOMER_ID_UPLOADED'
   | 'APPOINTMENT_ATTACHMENT_ACCESSED'
   | 'APPOINTMENT_ATTACHMENT_UPLOADED'
   | 'DATA_CLEANUP'
-  | 'RETENTION_CLEANUP';
+  | 'RETENTION_CLEANUP'
+  | 'RETENTION_CONFIG_VIEWED'
+  | 'RETENTION_CONFIG_UPDATED';
 
 export interface AuditMetadata {
   [key: string]: any;
@@ -38,15 +47,21 @@ export async function logAudit(
   entity?: string,
   entityId?: string,
   metadata?: AuditMetadata,
-  ipAddress?: string
+  ipAddress?: string,
+  branchId?: string | null
 ): Promise<void> {
   try {
+    const derivedBranchId =
+      branchId ??
+      (typeof metadata?.branchId === 'string' && metadata.branchId.length > 0 ? metadata.branchId : null);
+
     await prisma.auditLog.create({
       data: {
         userId: userId || null,
         action,
         entity: entity || null,
         entityId: entityId || null,
+        branchId: derivedBranchId,
         metadata: metadata || null,
         ipAddress: ipAddress || null,
       },

@@ -179,10 +179,12 @@ router.get('/appointment/:appointmentId/attachment',
         'Appointment',
         appointmentId,
         {
+          branchId: appointment.branchId,
           fileUrl: appointment.attachmentUrl,
           action: 'download',
         },
-        getIpAddressFromRequest(req)
+        getIpAddressFromRequest(req),
+        appointment.branchId
       );
       
       // Send file with correct content type
@@ -287,12 +289,14 @@ router.post('/appointment-attachment',
         'Appointment',
         appointmentId,
         {
+          branchId: appointment.branchId,
           fileUrl: fileUrl,
           fileName: req.file.originalname,
           fileSize: req.file.size,
           mimeType: req.file.mimetype,
         },
-        getIpAddressFromRequest(req)
+        getIpAddressFromRequest(req),
+        appointment.branchId
       );
       
       res.json({

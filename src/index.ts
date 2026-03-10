@@ -14,6 +14,7 @@ import staffRoutes from './routes/staff.js';
 import customerRoutes from './routes/customers.js';
 import auditRoutes from './routes/audit.js';
 import uploadRoutes from './routes/uploads.js';
+import retentionConfigRoutes from './routes/retention-config.js';
 
 dotenv.config();
 
@@ -61,6 +62,7 @@ app.use('/api/customers', customerRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/uploads', uploadRoutes);
 app.use('/api/files', uploadRoutes);
+app.use('/api/retention-config', retentionConfigRoutes);
 
 // 404 handler
 app.use((req, res) => {

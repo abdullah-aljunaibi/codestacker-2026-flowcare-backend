@@ -99,9 +99,21 @@ model Branch {
   serviceTypes  ServiceType[]
   slots         Slot[]
   appointments  Appointment[]
+  retentionConfig RetentionConfig?
   
   @@index([code])
   @@index([isActive])
+}
+
+model RetentionConfig {
+  id            String   @id @default(cuid())
+  branchId      String   @unique
+  branch        Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  retentionDays Int      @default(30)
+  updatedBy     String
+  updatedAt     DateTime @updatedAt
+
+  @@index([branchId])
 }
 
 // Service type offered at a branch

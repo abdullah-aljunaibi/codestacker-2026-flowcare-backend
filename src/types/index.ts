@@ -174,6 +174,13 @@ export type CreateAppointmentInput = z.infer<typeof createAppointmentSchema>;
 export type UpdateAppointmentInput = z.infer<typeof updateAppointmentSchema>;
 export type CheckInAppointmentInput = z.infer<typeof checkInAppointmentSchema>;
 
+export const updateRetentionConfigSchema = z.object({
+  branchId: z.string(),
+  retentionDays: z.number().int().positive(),
+});
+
+export type UpdateRetentionConfigInput = z.infer<typeof updateRetentionConfigSchema>;
+
 // ============================================
 // Query parameter schemas
 // ============================================

@@ -13,7 +13,7 @@ declare global {
 
 const prisma = new PrismaClient();
 
-function parseBasicAuthHeader(authorization?: string): { email: string; password: string } | null {
+export function parseBasicAuthHeader(authorization?: string): { email: string; password: string } | null {
   if (!authorization || !authorization.startsWith('Basic ')) {
     return null;
   }
@@ -44,12 +44,9 @@ function parseBasicAuthHeader(authorization?: string): { email: string; password
   }
 }
 
-async function authenticateRequest(req: Request): Promise<AuthenticatedUser | null> {
-  const credentials = parseBasicAuthHeader(req.headers.authorization);
-  if (!credentials) {
-    return null;
-  }
-
+export async function authenticateBasicCredentials(
+  credentials: { email: string; password: string }
+): Promise<AuthenticatedUser | null> {
   const user = await prisma.user.findUnique({
     where: { email: credentials.email },
     include: {
@@ -100,6 +97,15 @@ async function authenticateRequest(req: Request): Promise<AuthenticatedUser | nu
   }
 
   return authenticatedUser;
+}
+
+async function authenticateRequest(req: Request): Promise<AuthenticatedUser | null> {
+  const credentials = parseBasicAuthHeader(req.headers.authorization);
+  if (!credentials) {
+    return null;
+  }
+
+  return authenticateBasicCredentials(credentials);
 }
 
 export function authMiddleware(

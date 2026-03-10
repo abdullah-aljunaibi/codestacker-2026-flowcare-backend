@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authMiddleware, roleMiddleware, branchScopedMiddleware } from '../middleware/auth.js';
 import { createBranchSchema, updateBranchSchema } from '../types/index.js';
+import { getIpAddressFromRequest, logAudit } from '../utils/audit-logger.js';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -117,6 +118,20 @@ router.post('/', authMiddleware, roleMiddleware('ADMIN'), async (req: Request, r
         createdAt: true,
       },
     });
+
+    await logAudit(
+      req.user?.userId,
+      'BRANCH_CREATED',
+      'Branch',
+      branch.id,
+      {
+        branchId: branch.id,
+        code: branch.code,
+        name: branch.name,
+      },
+      getIpAddressFromRequest(req),
+      branch.id
+    );
     
     res.status(201).json({
       success: true,
@@ -260,6 +275,19 @@ router.patch('/:id', authMiddleware,
           updatedAt: true,
         },
       });
+
+      await logAudit(
+        req.user?.userId,
+        'BRANCH_UPDATED',
+        'Branch',
+        id,
+        {
+          branchId: id,
+          changes: validation.data,
+        },
+        getIpAddressFromRequest(req),
+        id
+      );
       
       res.json({
         success: true,
@@ -287,10 +315,37 @@ router.patch('/:id', authMiddleware,
 router.delete('/:id', authMiddleware, roleMiddleware('ADMIN'), async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id);
-    
+
+    const branch = await prisma.branch.findUnique({
+      where: { id },
+      select: { id: true, code: true, name: true },
+    });
+
+    if (!branch) {
+      res.status(404).json({
+        success: false,
+        error: 'Branch not found',
+      });
+      return;
+    }
+
     await prisma.branch.delete({
       where: { id },
     });
+
+    await logAudit(
+      req.user?.userId,
+      'BRANCH_DELETED',
+      'Branch',
+      id,
+      {
+        branchId: id,
+        code: branch.code,
+        name: branch.name,
+      },
+      getIpAddressFromRequest(req),
+      id
+    );
     
     res.json({
       success: true,

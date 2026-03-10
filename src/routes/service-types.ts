@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authMiddleware, roleMiddleware, branchScopedMiddleware } from '../middleware/auth.js';
 import { createServiceTypeSchema, updateServiceTypeSchema } from '../types/index.js';
+import { getIpAddressFromRequest, logAudit } from '../utils/audit-logger.js';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -143,6 +144,21 @@ router.post('/', authMiddleware,
           },
         },
       });
+
+      await logAudit(
+        req.user?.userId,
+        'SERVICE_TYPE_CREATED',
+        'ServiceType',
+        serviceType.id,
+        {
+          branchId: data.branchId,
+          code: serviceType.code,
+          name: serviceType.name,
+          duration: serviceType.duration,
+        },
+        getIpAddressFromRequest(req),
+        data.branchId
+      );
       
       res.status(201).json({
         success: true,
@@ -316,6 +332,19 @@ router.patch('/:id', authMiddleware,
           },
         },
       });
+
+      await logAudit(
+        req.user?.userId,
+        'SERVICE_TYPE_UPDATED',
+        'ServiceType',
+        id,
+        {
+          branchId: existingServiceType.branchId,
+          changes: validation.data,
+        },
+        getIpAddressFromRequest(req),
+        existingServiceType.branchId
+      );
       
       res.json({
         success: true,
@@ -372,6 +401,18 @@ router.delete('/:id', authMiddleware,
       await prisma.serviceType.delete({
         where: { id },
       });
+
+      await logAudit(
+        req.user?.userId,
+        'SERVICE_TYPE_DELETED',
+        'ServiceType',
+        id,
+        {
+          branchId: existingServiceType.branchId,
+        },
+        getIpAddressFromRequest(req),
+        existingServiceType.branchId
+      );
       
       res.json({
         success: true,

@@ -1,9 +1,10 @@
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcrypt';
 import { PrismaClient } from '@prisma/client';
-import { authMiddleware } from '../middleware/auth.js';
+import { authenticateBasicCredentials, parseBasicAuthHeader } from '../middleware/auth.js';
 import upload, { handleMulterError } from '../middleware/upload.js';
 import { registerSchema } from '../types/index.js';
+import { getIpAddressFromRequest, logAudit } from '../utils/audit-logger.js';
 import fs from 'fs';
 
 const router = Router();
@@ -90,6 +91,18 @@ router.post('/register', upload.single('idImage'), handleMulterError, async (req
       return { user: createdUser, customer: createdCustomer };
     });
 
+    await logAudit(
+      user.id,
+      'USER_REGISTERED',
+      'Customer',
+      customer.id,
+      {
+        userEmail: user.email,
+        customerId: customer.id,
+      },
+      getIpAddressFromRequest(req)
+    );
+
     res.status(201).json({
       success: true,
       data: {
@@ -115,17 +128,77 @@ router.post('/register', upload.single('idImage'), handleMulterError, async (req
 });
 
 // POST /api/auth/login - Basic Auth credential validation endpoint
-router.post('/login', authMiddleware, async (req: Request, res: Response) => {
+router.post('/login', async (req: Request, res: Response) => {
+  const credentials = parseBasicAuthHeader(req.headers.authorization);
+  const ipAddress = getIpAddressFromRequest(req);
+
+  if (!credentials) {
+    await logAudit(
+      null,
+      'AUTH_LOGIN_FAILED',
+      'User',
+      undefined,
+      {
+        reason: 'Missing or invalid Basic Authentication header',
+      },
+      ipAddress
+    );
+
+    res.setHeader('WWW-Authenticate', 'Basic realm="FlowCare"');
+    res.status(401).json({
+      success: false,
+      error: 'Invalid or missing Basic Authentication credentials',
+    });
+    return;
+  }
+
+  const authenticatedUser = await authenticateBasicCredentials(credentials);
+
+  if (!authenticatedUser) {
+    await logAudit(
+      null,
+      'AUTH_LOGIN_FAILED',
+      'User',
+      undefined,
+      {
+        email: credentials.email,
+        reason: 'Invalid email or password',
+      },
+      ipAddress
+    );
+
+    res.setHeader('WWW-Authenticate', 'Basic realm="FlowCare"');
+    res.status(401).json({
+      success: false,
+      error: 'Invalid or missing Basic Authentication credentials',
+    });
+    return;
+  }
+
+  await logAudit(
+    authenticatedUser.userId,
+    'AUTH_LOGIN_SUCCEEDED',
+    'User',
+    authenticatedUser.userId,
+    {
+      email: authenticatedUser.email,
+      role: authenticatedUser.role,
+      branchId: authenticatedUser.branchId,
+    },
+    ipAddress,
+    authenticatedUser.branchId
+  );
+
   res.json({
     success: true,
     data: {
       user: {
-        id: req.user?.userId,
-        email: req.user?.email,
-        role: req.user?.role,
-        branchId: req.user?.branchId,
-        customerId: req.user?.customerId,
-        staffId: req.user?.staffId,
+        id: authenticatedUser.userId,
+        email: authenticatedUser.email,
+        role: authenticatedUser.role,
+        branchId: authenticatedUser.branchId,
+        customerId: authenticatedUser.customerId,
+        staffId: authenticatedUser.staffId,
       },
     },
     message: 'Credentials are valid. Use the same Basic Auth header on protected routes.',

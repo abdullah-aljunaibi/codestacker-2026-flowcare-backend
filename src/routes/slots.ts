@@ -3,6 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import { authMiddleware, roleMiddleware, branchScopedMiddleware } from '../middleware/auth.js';
 import { createSlotSchema, updateSlotSchema } from '../types/index.js';
 import { logAudit, getIpAddressFromRequest } from '../utils/audit-logger.js';
+import { getEffectiveRetentionConfigs } from '../utils/retention-config.js';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -239,104 +240,92 @@ router.post('/', authMiddleware,
   }
 );
 
-// POST /api/slots/cleanup-retention - Permanently delete soft-deleted slots exceeding retention period (ADMIN only)
-// Retention period: specified in days via query param (default: 30 days)
-// Only deletes slots where deletedAt is older than the retention period
+// POST /api/slots/cleanup-retention - Permanently delete soft-deleted slots exceeding the DB-backed retention period (ADMIN only)
 router.post('/cleanup-retention', authMiddleware,
   roleMiddleware('ADMIN'),
   async (req: Request, res: Response) => {
     try {
-      // Retention period in days (default: 30 days)
-      const retentionDays = req.query.days ? parseInt(req.query.days as string, 10) : 30;
-      
-      if (isNaN(retentionDays) || retentionDays < 1) {
-        res.status(400).json({
-          success: false,
-          error: 'Invalid retention period. Must be a positive number of days.',
+      const retentionConfigs = await getEffectiveRetentionConfigs(prisma);
+      const now = new Date();
+      const deletionDetails: Array<{
+        id: string;
+        branchId: string;
+        branchCode: string;
+        retentionDays: number;
+        serviceTypeId: string;
+        startTime: string;
+        deletedAt: string;
+      }> = [];
+
+      for (const config of retentionConfigs) {
+        const cutoffDate = new Date(now);
+        cutoffDate.setDate(cutoffDate.getDate() - config.retentionDays);
+
+        const branchSlots = await prisma.slot.findMany({
+          where: {
+            branchId: config.branchId,
+            deletedAt: {
+              lte: cutoffDate,
+            },
+          },
+          select: {
+            id: true,
+            branchId: true,
+            serviceTypeId: true,
+            startTime: true,
+            deletedAt: true,
+          },
+          take: 1000,
         });
-        return;
+
+        deletionDetails.push(
+          ...branchSlots.map((slot) => ({
+            id: slot.id,
+            branchId: slot.branchId,
+            branchCode: config.branchCode,
+            retentionDays: config.retentionDays,
+            serviceTypeId: slot.serviceTypeId,
+            startTime: slot.startTime.toISOString(),
+            deletedAt: slot.deletedAt!.toISOString(),
+          }))
+        );
       }
-      
-      // Calculate cutoff date: slots deleted before this date will be permanently deleted
-      const cutoffDate = new Date();
-      cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
-      
-      // Find soft-deleted slots that exceed the retention period
-      const slotsToDelete = await prisma.slot.findMany({
-        where: {
-          deletedAt: {
-            lte: cutoffDate,
-          },
-        },
-        select: {
-          id: true,
-          branchId: true,
-          serviceTypeId: true,
-          startTime: true,
-          endTime: true,
-          deletedAt: true,
-          createdAt: true,
-        },
-        take: 1000, // Safety limit to prevent mass deletion accidents
-      });
-      
-      const slotIdsToDelete = slotsToDelete.map(slot => slot.id);
-      
-      // If no slots to delete, return early
-      if (slotIdsToDelete.length === 0) {
-        res.json({
-          success: true,
-          message: `No soft-deleted slots found exceeding ${retentionDays} day retention period`,
-          data: {
-            retentionDays,
-            cutoffDate: cutoffDate.toISOString(),
-            deletedCount: 0,
-            deletedSlots: [],
+
+      const slotIdsToDelete = deletionDetails.map((slot) => slot.id);
+
+      if (slotIdsToDelete.length > 0) {
+        await prisma.slot.deleteMany({
+          where: {
+            id: {
+              in: slotIdsToDelete,
+            },
           },
         });
-        return;
       }
-      
-      // Log what we're about to delete (for audit trail)
-      const deletionDetails = slotsToDelete.map(slot => ({
-        id: slot.id,
-        branchId: slot.branchId,
-        serviceTypeId: slot.serviceTypeId,
-        startTime: slot.startTime.toISOString(),
-        deletedAt: slot.deletedAt!.toISOString(),
-      }));
-      
-      // Permanently delete the slots
-      await prisma.slot.deleteMany({
-        where: {
-          id: {
-            in: slotIdsToDelete,
-          },
-        },
-      });
-      
-      // Audit log: retention cleanup performed
+
       await logAudit(
         req.user?.userId,
         'RETENTION_CLEANUP',
         'Slot',
         undefined,
         {
-          action: 'PERMANENT_DELETE_SOFT_DELETED_SLOTS',
-          retentionDays,
-          cutoffDate: cutoffDate.toISOString(),
           deletedCount: slotIdsToDelete.length,
           deletedSlots: deletionDetails,
+          retentionConfigs: retentionConfigs.map((config) => ({
+            branchId: config.branchId,
+            retentionDays: config.retentionDays,
+          })),
         },
         getIpAddressFromRequest(req)
       );
-      
+
       res.json({
         success: true,
-        message: `Permanently deleted ${slotIdsToDelete.length} soft-deleted slot(s) exceeding ${retentionDays} day retention period`,
+        message:
+          slotIdsToDelete.length === 0
+            ? 'No soft-deleted slots found exceeding configured retention periods'
+            : `Permanently deleted ${slotIdsToDelete.length} soft-deleted slot(s) exceeding configured retention periods`,
         data: {
-          retentionDays,
-          cutoffDate: cutoffDate.toISOString(),
           deletedCount: slotIdsToDelete.length,
           deletedSlots: deletionDetails,
         },
@@ -352,68 +341,66 @@ router.post('/cleanup-retention', authMiddleware,
 );
 
 // GET /api/slots/retention-preview - Preview which soft-deleted slots would be deleted (ADMIN only)
-// Returns slots that would be deleted without actually deleting them
-// Useful for testing/verification before running actual cleanup
 router.get('/retention-preview', authMiddleware,
   roleMiddleware('ADMIN'),
   async (req: Request, res: Response) => {
     try {
-      // Retention period in days (default: 30 days)
-      const retentionDays = req.query.days ? parseInt(req.query.days as string, 10) : 30;
-      
-      if (isNaN(retentionDays) || retentionDays < 1) {
-        res.status(400).json({
-          success: false,
-          error: 'Invalid retention period. Must be a positive number of days.',
+      const retentionConfigs = await getEffectiveRetentionConfigs(prisma);
+      const now = new Date();
+      const slotsToBeDeleted = [];
+
+      for (const config of retentionConfigs) {
+        const cutoffDate = new Date(now);
+        cutoffDate.setDate(cutoffDate.getDate() - config.retentionDays);
+
+        const branchSlots = await prisma.slot.findMany({
+          where: {
+            branchId: config.branchId,
+            deletedAt: {
+              lte: cutoffDate,
+            },
+          },
+          select: {
+            id: true,
+            branchId: true,
+            serviceTypeId: true,
+            startTime: true,
+            endTime: true,
+            capacity: true,
+            deletedAt: true,
+            createdAt: true,
+            branch: {
+              select: {
+                id: true,
+                name: true,
+                code: true,
+              },
+            },
+            serviceType: {
+              select: {
+                id: true,
+                name: true,
+                code: true,
+              },
+            },
+          },
+          take: 100,
+          orderBy: { deletedAt: 'asc' },
         });
-        return;
+
+        slotsToBeDeleted.push(
+          ...branchSlots.map((slot) => ({
+            ...slot,
+            retentionDays: config.retentionDays,
+            cutoffDate: cutoffDate.toISOString(),
+          }))
+        );
       }
-      
-      // Calculate cutoff date
-      const cutoffDate = new Date();
-      cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
-      
-      // Find soft-deleted slots that exceed the retention period
-      const slotsToBeDeleted = await prisma.slot.findMany({
-        where: {
-          deletedAt: {
-            lte: cutoffDate,
-          },
-        },
-        select: {
-          id: true,
-          branchId: true,
-          serviceTypeId: true,
-          startTime: true,
-          endTime: true,
-          capacity: true,
-          deletedAt: true,
-          createdAt: true,
-          branch: {
-            select: {
-              id: true,
-              name: true,
-              code: true,
-            },
-          },
-          serviceType: {
-            select: {
-              id: true,
-              name: true,
-              code: true,
-            },
-          },
-        },
-        take: 100,
-        orderBy: { deletedAt: 'asc' },
-      });
-      
+
       res.json({
         success: true,
-        message: `Found ${slotsToBeDeleted.length} soft-deleted slot(s) exceeding ${retentionDays} day retention period`,
+        message: `Found ${slotsToBeDeleted.length} soft-deleted slot(s) exceeding configured retention periods`,
         data: {
-          retentionDays,
-          cutoffDate: cutoffDate.toISOString(),
           wouldDeleteCount: slotsToBeDeleted.length,
           slotsToBeDeleted,
         },
