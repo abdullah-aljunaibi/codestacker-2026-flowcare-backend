@@ -184,6 +184,8 @@ curl -X POST http://localhost:3000/api/slots/cleanup-retention \
   -u admin@flowcare.com:admin123
 ```
 
+Retention cleanup is relation-safe and idempotent. It only hard-deletes slots whose `deletedAt` is older than the effective DB-backed retention window, removes related `SlotAssignment` rows, nulls `Appointment.slotId` for historical appointments, preserves prior soft-delete audit rows, and records a `SLOT_HARD_DELETED` audit event for each deleted slot. Running it again immediately is a no-op.
+
 Assign staff to a slot:
 
 ```bash

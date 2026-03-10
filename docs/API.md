@@ -155,7 +155,7 @@ curl -X POST http://localhost:3000/api/branches \
 | `GET` | `/api/slots/branch-view` | Admin, Branch Manager, Staff | Internal listing; managers/staff are branch-scoped; soft-deleted rows stay hidden |
 | `GET` | `/api/slots/admin-view` | Admin | Admin-only listing; `includeDeleted=true` includes soft-deleted rows |
 | `POST` | `/api/slots` | Admin, Branch Manager | Create slot |
-| `POST` | `/api/slots/cleanup-retention` | Admin | Deletes soft-deleted slots based on DB retention config |
+| `POST` | `/api/slots/cleanup-retention` | Admin | Hard-deletes only soft-deleted slots older than each branch's DB-backed retention window; idempotent on rerun |
 | `GET` | `/api/slots/retention-preview` | Admin | Preview retention cleanup |
 | `POST` | `/api/slots/:id/assign-staff` | Admin, Branch Manager | Explicitly assign a staff member to a slot; managers limited to own branch; staff must belong to the slot branch; duplicate assignment is idempotent |
 | `GET` | `/api/slots/:id` | Any authenticated user with access | Admin can include deleted slots with `includeDeleted=true` |
@@ -170,6 +170,15 @@ Cleanup example:
 curl -X POST http://localhost:3000/api/slots/cleanup-retention \
   -u admin@flowcare.com:admin123
 ```
+
+Retention cleanup behavior:
+
+- Deletes only slots whose `deletedAt` is older than the effective branch retention window stored in the database
+- Runs inside a Prisma transaction with `Serializable` isolation
+- Deletes related `SlotAssignment` rows before removing the slot
+- Sets related `Appointment.slotId` references to `null` so historical appointments remain available
+- Preserves prior `SLOT_DELETED` audit rows and writes one new `SLOT_HARD_DELETED` audit row per hard-deleted slot
+- A second run is a no-op when no additional slots have become eligible
 
 Assign staff to a slot:
 

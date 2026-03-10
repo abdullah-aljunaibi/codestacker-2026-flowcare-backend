@@ -188,8 +188,8 @@ model Appointment {
   branch        Branch   @relation(fields: [branchId], references: [id])
   customerId    String
   customer      Customer @relation(fields: [customerId], references: [id])
-  slotId        String
-  slot          Slot     @relation(fields: [slotId], references: [id])
+  slotId        String?
+  slot          Slot?    @relation(fields: [slotId], references: [id], onDelete: SetNull)
   staffId       String?
   staff         Staff?   @relation(fields: [staffId], references: [id])
   serviceTypeId String

@@ -310,7 +310,11 @@ function assertValidStatusTransition(currentStatus: AppointmentStatus, nextStatu
   }
 }
 
-async function syncSlotBookedCount(tx: PrismaClient | Prisma.TransactionClient, slotId: string) {
+async function syncSlotBookedCount(tx: PrismaClient | Prisma.TransactionClient, slotId?: string | null) {
+  if (!slotId) {
+    return;
+  }
+
   const activeCount = await tx.appointment.count({
     where: {
       slotId,
@@ -318,7 +322,7 @@ async function syncSlotBookedCount(tx: PrismaClient | Prisma.TransactionClient, 
     },
   });
 
-  await tx.slot.update({
+  await tx.slot.updateMany({
     where: { id: slotId },
     data: { bookedCount: activeCount },
   });
@@ -789,6 +793,10 @@ router.patch('/:id', async (req: Request, res: Response) => {
           throw new ApiError(403, 'Customers cannot reassign staff');
         }
 
+        if (!appointment.slotId) {
+          throw new ApiError(400, 'Cannot reassign staff for an appointment whose slot has been cleaned up');
+        }
+
         const slot = await tx.slot.findUnique({
           where: { id: appointment.slotId },
           select: {
@@ -802,7 +810,7 @@ router.patch('/:id', async (req: Request, res: Response) => {
         });
 
         if (!slot) {
-          throw new ApiError(404, 'Appointment slot not found');
+          throw new ApiError(400, 'Cannot reassign staff for an appointment whose slot is no longer available');
         }
 
         nextData.staffId = await resolveBookingStaffId(tx, slot, updateData.staffId);

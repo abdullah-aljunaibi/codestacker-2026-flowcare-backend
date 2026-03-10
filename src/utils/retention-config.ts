@@ -1,8 +1,10 @@
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 
 export const DEFAULT_RETENTION_DAYS = 30;
 
-export async function getEffectiveRetentionConfigs(prisma: PrismaClient) {
+type RetentionClient = PrismaClient | Prisma.TransactionClient;
+
+export async function getEffectiveRetentionConfigs(prisma: RetentionClient) {
   const [branches, configs] = await Promise.all([
     prisma.branch.findMany({
       select: {
@@ -39,7 +41,7 @@ export async function getEffectiveRetentionConfigs(prisma: PrismaClient) {
   });
 }
 
-export async function getBranchRetentionDays(prisma: PrismaClient, branchId: string) {
+export async function getBranchRetentionDays(prisma: RetentionClient, branchId: string) {
   const config = await prisma.retentionConfig.findUnique({
     where: { branchId },
     select: { retentionDays: true },

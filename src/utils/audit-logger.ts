@@ -1,7 +1,8 @@
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { Request, Response, NextFunction } from 'express';
 
 const prisma = new PrismaClient();
+type AuditClient = PrismaClient | Prisma.TransactionClient;
 
 export type AuditAction =
   | 'APPOINTMENT_CREATED'
@@ -13,6 +14,7 @@ export type AuditAction =
   | 'SLOT_CREATED'
   | 'SLOT_UPDATED'
   | 'SLOT_DELETED'
+  | 'SLOT_HARD_DELETED'
   | 'SLOT_SOFT_DELETED'
   | 'SLOT_RESTORED'
   | 'STAFF_ASSIGNED'
@@ -51,25 +53,38 @@ export async function logAudit(
   branchId?: string | null
 ): Promise<void> {
   try {
-    const derivedBranchId =
-      branchId ??
-      (typeof metadata?.branchId === 'string' && metadata.branchId.length > 0 ? metadata.branchId : null);
-
-    await prisma.auditLog.create({
-      data: {
-        userId: userId || null,
-        action,
-        entity: entity || null,
-        entityId: entityId || null,
-        branchId: derivedBranchId,
-        metadata: metadata || null,
-        ipAddress: ipAddress || null,
-      },
-    });
+    await createAuditLog(prisma, userId, action, entity, entityId, metadata, ipAddress, branchId);
   } catch (error) {
     // Don't fail the main operation if audit logging fails
     console.error('Audit logging failed:', error);
   }
+}
+
+export async function createAuditLog(
+  client: AuditClient,
+  userId: string | null | undefined,
+  action: AuditAction,
+  entity?: string,
+  entityId?: string,
+  metadata?: AuditMetadata,
+  ipAddress?: string,
+  branchId?: string | null
+): Promise<void> {
+  const derivedBranchId =
+    branchId ??
+    (typeof metadata?.branchId === 'string' && metadata.branchId.length > 0 ? metadata.branchId : null);
+
+  await client.auditLog.create({
+    data: {
+      userId: userId || null,
+      action,
+      entity: entity || null,
+      entityId: entityId || null,
+      branchId: derivedBranchId,
+      metadata: metadata || null,
+      ipAddress: ipAddress || null,
+    },
+  });
 }
 
 /**

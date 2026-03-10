@@ -1,8 +1,8 @@
 import { Router, Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { authMiddleware, roleMiddleware, branchScopedMiddleware } from '../middleware/auth.js';
 import { assignStaffToSlotSchema, createSlotSchema, updateSlotSchema } from '../types/index.js';
-import { logAudit, getIpAddressFromRequest } from '../utils/audit-logger.js';
+import { createAuditLog, logAudit, getIpAddressFromRequest } from '../utils/audit-logger.js';
 import { getEffectiveRetentionConfigs } from '../utils/retention-config.js';
 
 const router = Router();
@@ -348,89 +348,135 @@ router.post('/cleanup-retention', authMiddleware,
   roleMiddleware('ADMIN'),
   async (req: Request, res: Response) => {
     try {
-      const retentionConfigs = await getEffectiveRetentionConfigs(prisma);
       const now = new Date();
-      const deletionDetails: Array<{
-        id: string;
-        branchId: string;
-        branchCode: string;
-        retentionDays: number;
-        serviceTypeId: string;
-        startTime: string;
-        deletedAt: string;
-      }> = [];
+      const ipAddress = getIpAddressFromRequest(req);
+      const cleanupResult = await prisma.$transaction(async (tx) => {
+        const retentionConfigs = await getEffectiveRetentionConfigs(tx);
+        const deletionDetails: Array<{
+          id: string;
+          branchId: string;
+          branchCode: string;
+          retentionDays: number;
+          serviceTypeId: string;
+          startTime: string;
+          deletedAt: string;
+          appointmentCount: number;
+          assignmentCount: number;
+        }> = [];
 
-      for (const config of retentionConfigs) {
-        const cutoffDate = new Date(now);
-        cutoffDate.setDate(cutoffDate.getDate() - config.retentionDays);
+        for (const config of retentionConfigs) {
+          const cutoffDate = new Date(now);
+          cutoffDate.setDate(cutoffDate.getDate() - config.retentionDays);
 
-        const branchSlots = await prisma.slot.findMany({
-          where: {
-            branchId: config.branchId,
-            deletedAt: {
-              lte: cutoffDate,
+          const branchSlots = await tx.slot.findMany({
+            where: {
+              branchId: config.branchId,
+              deletedAt: {
+                lte: cutoffDate,
+              },
             },
-          },
-          select: {
-            id: true,
-            branchId: true,
-            serviceTypeId: true,
-            startTime: true,
-            deletedAt: true,
-          },
-          take: 1000,
-        });
+            select: {
+              id: true,
+              branchId: true,
+              serviceTypeId: true,
+              startTime: true,
+              deletedAt: true,
+              _count: {
+                select: {
+                  appointments: true,
+                  assignments: true,
+                },
+              },
+            },
+            orderBy: [
+              { deletedAt: 'asc' },
+              { id: 'asc' },
+            ],
+          });
 
-        deletionDetails.push(
-          ...branchSlots.map((slot) => ({
-            id: slot.id,
-            branchId: slot.branchId,
-            branchCode: config.branchCode,
-            retentionDays: config.retentionDays,
-            serviceTypeId: slot.serviceTypeId,
-            startTime: slot.startTime.toISOString(),
-            deletedAt: slot.deletedAt!.toISOString(),
-          }))
+          for (const slot of branchSlots) {
+            await tx.slotAssignment.deleteMany({
+              where: { slotId: slot.id },
+            });
+
+            await tx.appointment.updateMany({
+              where: { slotId: slot.id },
+              data: { slotId: null },
+            });
+
+            await createAuditLog(
+              tx,
+              req.user?.userId,
+              'SLOT_HARD_DELETED',
+              'Slot',
+              slot.id,
+              {
+                branchId: slot.branchId,
+                branchCode: config.branchCode,
+                retentionDays: config.retentionDays,
+                serviceTypeId: slot.serviceTypeId,
+                startTime: slot.startTime.toISOString(),
+                deletedAt: slot.deletedAt!.toISOString(),
+                hardDeletedAt: now.toISOString(),
+                appointmentCount: slot._count.appointments,
+                assignmentCount: slot._count.assignments,
+              },
+              ipAddress,
+              slot.branchId
+            );
+
+            await tx.slot.delete({
+              where: { id: slot.id },
+            });
+
+            deletionDetails.push({
+              id: slot.id,
+              branchId: slot.branchId,
+              branchCode: config.branchCode,
+              retentionDays: config.retentionDays,
+              serviceTypeId: slot.serviceTypeId,
+              startTime: slot.startTime.toISOString(),
+              deletedAt: slot.deletedAt!.toISOString(),
+              appointmentCount: slot._count.appointments,
+              assignmentCount: slot._count.assignments,
+            });
+          }
+        }
+
+        await createAuditLog(
+          tx,
+          req.user?.userId,
+          'RETENTION_CLEANUP',
+          'Slot',
+          undefined,
+          {
+            deletedCount: deletionDetails.length,
+            deletedSlots: deletionDetails,
+            retentionConfigs: retentionConfigs.map((config) => ({
+              branchId: config.branchId,
+              retentionDays: config.retentionDays,
+            })),
+          },
+          ipAddress
         );
-      }
 
-      const slotIdsToDelete = deletionDetails.map((slot) => slot.id);
-
-      if (slotIdsToDelete.length > 0) {
-        await prisma.slot.deleteMany({
-          where: {
-            id: {
-              in: slotIdsToDelete,
-            },
-          },
-        });
-      }
-
-      await logAudit(
-        req.user?.userId,
-        'RETENTION_CLEANUP',
-        'Slot',
-        undefined,
-        {
-          deletedCount: slotIdsToDelete.length,
+        return {
+          deletedCount: deletionDetails.length,
           deletedSlots: deletionDetails,
-          retentionConfigs: retentionConfigs.map((config) => ({
-            branchId: config.branchId,
-            retentionDays: config.retentionDays,
-          })),
-        },
-        getIpAddressFromRequest(req)
-      );
+        };
+      }, {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      });
 
       res.json({
         success: true,
         message:
-          slotIdsToDelete.length === 0
+          cleanupResult.deletedCount === 0
             ? 'No soft-deleted slots found exceeding configured retention periods'
-            : `Permanently deleted ${slotIdsToDelete.length} soft-deleted slot(s) exceeding configured retention periods`,
+            : `Permanently deleted ${cleanupResult.deletedCount} soft-deleted slot(s) exceeding configured retention periods`,
         data: {
-          deletedCount: slotIdsToDelete.length,
-          deletedSlots: deletionDetails,
+          deletedCount: cleanupResult.deletedCount,
+          deletedSlots: cleanupResult.deletedSlots,
         },
       });
     } catch (error: any) {
@@ -487,7 +533,6 @@ router.get('/retention-preview', authMiddleware,
               },
             },
           },
-          take: 100,
           orderBy: { deletedAt: 'asc' },
         });
 
