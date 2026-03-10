@@ -38,7 +38,7 @@ Error JSON responses:
 | `GET` | `/health` | Public | Health check |
 | `GET` | `/api/branches` | Public | List branches |
 | `GET` | `/api/service-types` | Public | List service types; optional `branchId`, `isActive` |
-| `GET` | `/api/slots` | Public | List slots; optional `branchId`, `serviceTypeId`, `startDate`, `endDate`, `available` |
+| `GET` | `/api/slots` | Public | List public slots; optional `branchId`, `serviceTypeId`, `startDate`, `endDate`, `available`; never returns soft-deleted rows |
 | `POST` | `/api/auth/register` | Public | Register customer with multipart ID image |
 | `POST` | `/api/auth/login` | Public | Validate Basic Auth credentials and record login attempt |
 
@@ -132,7 +132,9 @@ curl -X POST http://localhost:3000/api/branches \
 
 | Method | Path | Auth | Notes |
 | --- | --- | --- | --- |
-| `GET` | `/api/slots` | Public | Filters: `branchId`, `serviceTypeId`, `startDate`, `endDate`, `available`, `includeDeleted` |
+| `GET` | `/api/slots` | Public | Filters: `branchId`, `serviceTypeId`, `startDate`, `endDate`, `available`; always excludes soft-deleted rows and ignores `includeDeleted` |
+| `GET` | `/api/slots/branch-view` | Admin, Branch Manager, Staff | Internal listing; managers/staff are branch-scoped; soft-deleted rows stay hidden |
+| `GET` | `/api/slots/admin-view` | Admin | Admin-only listing; `includeDeleted=true` includes soft-deleted rows |
 | `POST` | `/api/slots` | Admin, Branch Manager | Create slot |
 | `POST` | `/api/slots/cleanup-retention` | Admin | Deletes soft-deleted slots based on DB retention config |
 | `GET` | `/api/slots/retention-preview` | Admin | Preview retention cleanup |

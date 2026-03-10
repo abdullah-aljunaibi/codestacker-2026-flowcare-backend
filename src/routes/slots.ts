@@ -8,110 +8,174 @@ import { getEffectiveRetentionConfigs } from '../utils/retention-config.js';
 const router = Router();
 const prisma = new PrismaClient();
 
-// All slot routes require authentication
+const slotListSelect = {
+  id: true,
+  startTime: true,
+  endTime: true,
+  capacity: true,
+  bookedCount: true,
+  isActive: true,
+  deletedAt: true,
+  createdAt: true,
+  branch: {
+    select: {
+      id: true,
+      name: true,
+      code: true,
+    },
+  },
+  serviceType: {
+    select: {
+      id: true,
+      name: true,
+      code: true,
+      duration: true,
+    },
+  },
+  _count: {
+    select: {
+      assignments: true,
+      appointments: true,
+    },
+  },
+};
 
-// GET /api/slots - List available slots
-// ADMIN: all slots (can use includeDeleted=true to see soft-deleted)
-// BRANCH_MANAGER/STAFF: slots in their branch (excludes soft-deleted)
-// CUSTOMER: active slots with available capacity (for booking, excludes soft-deleted)
+function buildSlotListWhereClause(
+  query: Request['query'],
+  options: {
+    branchId?: string;
+    allowDeleted?: boolean;
+    forceAvailable?: boolean;
+  } = {}
+) {
+  const { branchId, serviceTypeId, startDate, endDate, isActive, available } = query;
+  const whereClause: any = {};
+
+  if (options.branchId) {
+    whereClause.branchId = options.branchId;
+  } else if (branchId) {
+    whereClause.branchId = branchId as string;
+  }
+
+  if (serviceTypeId) {
+    whereClause.serviceTypeId = serviceTypeId as string;
+  }
+
+  if (isActive !== undefined) {
+    whereClause.isActive = isActive === 'true';
+  }
+
+  if (startDate || endDate) {
+    whereClause.startTime = {};
+
+    if (startDate) {
+      whereClause.startTime.gte = new Date(startDate as string);
+    }
+
+    if (endDate) {
+      whereClause.startTime.lte = new Date(endDate as string);
+    }
+  }
+
+  if (!options.allowDeleted) {
+    whereClause.deletedAt = null;
+  }
+
+  if (available === 'true' || options.forceAvailable) {
+    whereClause.bookedCount = { lt: prisma.slot.fields.capacity };
+    whereClause.isActive = true;
+  }
+
+  return whereClause;
+}
+
+// GET /api/slots - Public list of bookable slots. Never returns soft-deleted rows.
 router.get('/', async (req: Request, res: Response) => {
   try {
-    const { branchId, serviceTypeId, startDate, endDate, isActive, available, includeDeleted } = req.query;
-    
-    let whereClause: any = {};
-    
-    // Filter by branch
-    if (branchId) {
-      whereClause.branchId = branchId as string;
-    } else if (req.user?.role === 'BRANCH_MANAGER' || req.user?.role === 'STAFF') {
-      // Auto-filter to user's branch for non-ADMIN
-      if (req.user?.branchId) {
-        whereClause.branchId = req.user.branchId;
-      }
-    }
-    
-    // Filter by service type
-    if (serviceTypeId) {
-      whereClause.serviceTypeId = serviceTypeId as string;
-    }
-    
-    // Filter by active status
-    if (isActive !== undefined) {
-      whereClause.isActive = isActive === 'true';
-    }
-    
-    // Filter by date range
-    if (startDate || endDate) {
-      whereClause.startTime = {};
-      if (startDate) {
-        whereClause.startTime.gte = new Date(startDate as string);
-      }
-      if (endDate) {
-        whereClause.startTime.lte = new Date(endDate as string);
-      }
-    }
-    
-    // Exclude soft-deleted slots by default (unless admin requests includeDeleted)
-    const canViewDeleted = req.user?.role === 'ADMIN' && includeDeleted === 'true';
-    if (!canViewDeleted) {
-      whereClause.deletedAt = null;
-    }
-    
-    // Filter by availability (for CUSTOMER role)
-    if (available === 'true' || req.user?.role === 'CUSTOMER') {
-      whereClause.bookedCount = { lt: prisma.slot.fields.capacity };
-      whereClause.isActive = true;
-    }
-    
+    const whereClause = buildSlotListWhereClause(req.query, {
+      forceAvailable: req.query.available === 'true',
+    });
+
     const slots = await prisma.slot.findMany({
       where: whereClause,
-      select: {
-        id: true,
-        startTime: true,
-        endTime: true,
-        capacity: true,
-        bookedCount: true,
-        isActive: true,
-        deletedAt: true,
-        createdAt: true,
-        branch: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-          },
-        },
-        serviceType: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-            duration: true,
-          },
-        },
-        _count: {
-          select: {
-            assignments: true,
-            appointments: true,
-          },
-        },
-      },
+      select: slotListSelect,
       orderBy: { startTime: 'asc' },
       take: 100,
     });
-    
+
     res.json({
       success: true,
       data: slots,
     });
   } catch (error) {
-    console.error('Error listing slots:', error);
+    console.error('Error listing public slots:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error',
     });
   }
 });
+
+// GET /api/slots/branch-view - Authenticated internal listing for ADMIN/BRANCH_MANAGER/STAFF.
+// Managers and staff remain branch-scoped and deleted slots stay hidden.
+router.get('/branch-view', authMiddleware,
+  roleMiddleware('ADMIN', 'BRANCH_MANAGER', 'STAFF'),
+  branchScopedMiddleware(true),
+  async (req: Request, res: Response) => {
+    try {
+      const branchId = typeof req.query.branchId === 'string' ? req.query.branchId : undefined;
+      const whereClause = buildSlotListWhereClause(req.query, { branchId });
+
+      const slots = await prisma.slot.findMany({
+        where: whereClause,
+        select: slotListSelect,
+        orderBy: { startTime: 'asc' },
+        take: 100,
+      });
+
+      res.json({
+        success: true,
+        data: slots,
+      });
+    } catch (error) {
+      console.error('Error listing branch-scoped slots:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Internal server error',
+      });
+    }
+  }
+);
+
+// GET /api/slots/admin-view - Admin-only listing. includeDeleted=true includes soft-deleted rows.
+router.get('/admin-view', authMiddleware,
+  roleMiddleware('ADMIN'),
+  async (req: Request, res: Response) => {
+    try {
+      const whereClause = buildSlotListWhereClause(req.query, {
+        allowDeleted: req.query.includeDeleted === 'true',
+      });
+
+      const slots = await prisma.slot.findMany({
+        where: whereClause,
+        select: slotListSelect,
+        orderBy: { startTime: 'asc' },
+        take: 100,
+      });
+
+      res.json({
+        success: true,
+        data: slots,
+      });
+    } catch (error) {
+      console.error('Error listing admin slots:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Internal server error',
+      });
+    }
+  }
+);
 
 // POST /api/slots - Create time slot (ADMIN/BRANCH_MANAGER)
 router.post('/', authMiddleware,

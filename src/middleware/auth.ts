@@ -193,7 +193,10 @@ export function branchScopedMiddleware(allowAdmin: boolean = true) {
         return;
       }
 
-      const requestedBranchId = req.params.branchId || req.body.branchId;
+      const requestedBranchId =
+        req.params.branchId ||
+        req.body.branchId ||
+        (typeof req.query.branchId === 'string' ? req.query.branchId : undefined);
 
       if (requestedBranchId && requestedBranchId !== req.user.branchId) {
         res.status(403).json({

@@ -107,6 +107,20 @@ List public slots for a branch and service:
 curl "http://localhost:3000/api/slots?branchId=BRANCH_ID&serviceTypeId=SERVICE_TYPE_ID&available=true"
 ```
 
+List internal branch-scoped slots as manager or staff:
+
+```bash
+curl -u manager.mct-001@flowcare.com:password123 \
+  "http://localhost:3000/api/slots/branch-view?branchId=BRANCH_ID"
+```
+
+List admin slots including soft-deleted rows:
+
+```bash
+curl -u admin@flowcare.com:admin123 \
+  "http://localhost:3000/api/slots/admin-view?includeDeleted=true"
+```
+
 Book an appointment as a customer:
 
 ```bash
