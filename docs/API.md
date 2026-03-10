@@ -67,19 +67,38 @@ curl -X POST http://localhost:3000/api/auth/register \
 | Method | Path | Auth | Notes |
 | --- | --- | --- | --- |
 | `GET` | `/api/appointments` | Any authenticated user | Customers see own, staff/managers see branch, admin sees all |
-| `POST` | `/api/appointments` | Customer, Staff, Branch Manager, Admin | Books appointment; validates slot capacity and duplicate bookings |
+| `POST` | `/api/appointments` | Customer, Staff, Branch Manager, Admin | Primary booking contract. Accepts `multipart/form-data`, reads text fields from `req.body`, and accepts optional `attachment` in `req.file` |
 | `GET` | `/api/appointments/:id` | Scoped | Customers own only; staff/manager branch scoped |
 | `PATCH` | `/api/appointments/:id` | Scoped | Reschedule with `slotId`, update notes, or update status |
 | `DELETE` | `/api/appointments/:id` | Scoped | Soft-cancel appointment record |
 
-Book:
+Book with no attachment:
 
 ```bash
 curl -X POST http://localhost:3000/api/appointments \
   -u customer@example.com:password123 \
-  -H "Content-Type: application/json" \
-  -d '{"slotId":"SLOT_ID","notes":"First visit"}'
+  -F slotId=SLOT_ID \
+  -F notes="First visit"
 ```
+
+Book with an image or PDF attachment:
+
+```bash
+curl -X POST http://localhost:3000/api/appointments \
+  -u customer@example.com:password123 \
+  -F slotId=SLOT_ID \
+  -F notes="Need wheelchair access" \
+  -F attachment=@/absolute/path/to/supporting-document.pdf
+```
+
+Attachment rules:
+
+- Allowed types: images (`.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`) and PDF (`.pdf`)
+- Validation checks both MIME type and file extension
+- Maximum size: 5MB
+- Files are stored in private server storage and only exposed through the permissioned attachment retrieval route
+
+Invalid file types and oversized files return `400 Bad Request`.
 
 Reschedule:
 
@@ -195,16 +214,7 @@ Staff assignment scope is slot-level only. The API stores assignments in `SlotAs
 | --- | --- | --- | --- |
 | `GET` | `/api/files/customer-id/:customerId` | Admin | Retrieve stored customer ID image |
 | `GET` | `/api/files/appointment/:appointmentId/attachment` | Scoped | Customer owns appointment, or branch staff/manager, or admin |
-| `POST` | `/api/uploads/appointment-attachment` | Scoped | Multipart field: `appointmentAttachment` |
-
-Upload appointment attachment:
-
-```bash
-curl -X POST http://localhost:3000/api/uploads/appointment-attachment \
-  -u customer@example.com:password123 \
-  -F appointmentId=APPOINTMENT_ID \
-  -F appointmentAttachment=@/absolute/path/to/document.pdf
-```
+| `POST` | `/api/uploads/appointment-attachment` | Scoped | Legacy helper route; supported, but `POST /api/appointments` is the primary contract for booking with an attachment |
 
 ## Audit
 

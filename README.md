@@ -122,16 +122,23 @@ curl -u admin@flowcare.com:admin123 \
   "http://localhost:3000/api/slots/admin-view?includeDeleted=true"
 ```
 
-Book an appointment as a customer:
+Book an appointment as a customer, with the optional attachment on the same route:
 
 ```bash
 curl -X POST http://localhost:3000/api/appointments \
   -u customer@example.com:password123 \
-  -H "Content-Type: application/json" \
-  -d '{
-    "slotId": "SLOT_ID",
-    "notes": "First visit"
-  }'
+  -F slotId=SLOT_ID \
+  -F notes="First visit" \
+  -F attachment=@/absolute/path/to/supporting-document.pdf
+```
+
+Booking without an attachment uses the same route and contract:
+
+```bash
+curl -X POST http://localhost:3000/api/appointments \
+  -u customer@example.com:password123 \
+  -F slotId=SLOT_ID \
+  -F notes="First visit"
 ```
 
 Reschedule an appointment:
@@ -200,6 +207,8 @@ curl -u admin@flowcare.com:admin123 \
   http://localhost:3000/api/audit/export \
   -o audit-logs.csv
 ```
+
+`POST /api/appointments` accepts `multipart/form-data` as the primary booking contract. Text fields arrive in `req.body`, and the optional `attachment` file arrives in `req.file`. Files are validated for image/PDF type, size-limited to 5MB, stored in private storage, and retrieved through the permissioned file route only.
 
 Full endpoint documentation is in `docs/API.md`.
 

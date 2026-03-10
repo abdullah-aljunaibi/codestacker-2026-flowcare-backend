@@ -1,5 +1,18 @@
 import { z } from 'zod';
 
+const optionalTrimmedString = () =>
+  z.preprocess(
+    (value) => {
+      if (typeof value !== 'string') {
+        return value;
+      }
+
+      const trimmed = value.trim();
+      return trimmed.length === 0 ? undefined : trimmed;
+    },
+    z.string().min(1).optional()
+  );
+
 // ============================================
 // User & Auth schemas
 // ============================================
@@ -134,13 +147,13 @@ export type AssignStaffToSlotInput = z.infer<typeof assignStaffToSlotSchema>;
 // ============================================
 
 export const createAppointmentSchema = z.object({
-  branchId: z.string().optional(),
-  customerId: z.string().optional(),
+  branchId: optionalTrimmedString(),
+  customerId: optionalTrimmedString(),
   slotId: z.string(),
-  staffId: z.string().optional(),
-  serviceTypeId: z.string().optional(),
-  notes: z.string().optional(),
-  attachmentUrl: z.string().optional(),
+  staffId: optionalTrimmedString(),
+  serviceTypeId: optionalTrimmedString(),
+  notes: optionalTrimmedString(),
+  attachmentUrl: optionalTrimmedString(),
 });
 
 export const updateAppointmentSchema = z.object({
@@ -155,10 +168,10 @@ export const updateAppointmentSchema = z.object({
     'COMPLETED',
     'NO_SHOW',
   ]).optional(),
-  slotId: z.string().optional(),
-  staffId: z.string().optional(),
-  notes: z.string().optional(),
-  cancelReason: z.string().optional(),
+  slotId: optionalTrimmedString(),
+  staffId: optionalTrimmedString(),
+  notes: optionalTrimmedString(),
+  cancelReason: optionalTrimmedString(),
   checkedInAt: z.string().datetime().optional(),
   startedAt: z.string().datetime().optional(),
   completedAt: z.string().datetime().optional(),

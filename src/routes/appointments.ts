@@ -1,11 +1,56 @@
 import { AppointmentStatus, Prisma, PrismaClient } from '@prisma/client';
 import { Request, Response, Router } from 'express';
+import fs from 'fs';
+import multer from 'multer';
+import path from 'path';
+import { randomUUID } from 'crypto';
 import { authMiddleware } from '../middleware/auth.js';
 import { createAppointmentSchema, updateAppointmentSchema } from '../types/index.js';
 import { getIpAddressFromRequest, logAudit } from '../utils/audit-logger.js';
 
 const router = Router();
 const prisma = new PrismaClient();
+const PRIVATE_APPOINTMENT_ATTACHMENT_DIR = path.join(process.cwd(), 'storage', 'private', 'appointment-attachments');
+const APPOINTMENT_ATTACHMENT_MAX_SIZE = 5 * 1024 * 1024;
+const APPOINTMENT_ATTACHMENT_MIME_TO_EXTENSIONS: Record<string, string[]> = {
+  'image/jpeg': ['.jpg', '.jpeg'],
+  'image/png': ['.png'],
+  'image/gif': ['.gif'],
+  'image/webp': ['.webp'],
+  'application/pdf': ['.pdf'],
+};
+const appointmentUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      fs.mkdirSync(PRIVATE_APPOINTMENT_ATTACHMENT_DIR, { recursive: true });
+      cb(null, PRIVATE_APPOINTMENT_ATTACHMENT_DIR);
+    },
+    filename: (_req, file, cb) => {
+      const allowedExtensions = APPOINTMENT_ATTACHMENT_MIME_TO_EXTENSIONS[file.mimetype];
+
+      if (!allowedExtensions) {
+        cb(new Error('Invalid attachment type. Only images and PDF files are allowed.'), '');
+        return;
+      }
+
+      cb(null, `${randomUUID()}${allowedExtensions[0]}`);
+    },
+  }),
+  fileFilter: (_req, file, cb) => {
+    const allowedExtensions = APPOINTMENT_ATTACHMENT_MIME_TO_EXTENSIONS[file.mimetype];
+    const extension = path.extname(file.originalname).toLowerCase();
+
+    if (!allowedExtensions || !allowedExtensions.includes(extension)) {
+      cb(new Error('Invalid attachment type. Only images and PDF files are allowed.'), false);
+      return;
+    }
+
+    cb(null, true);
+  },
+  limits: {
+    fileSize: APPOINTMENT_ATTACHMENT_MAX_SIZE,
+  },
+});
 
 const ACTIVE_SLOT_STATUSES: AppointmentStatus[] = ['SCHEDULED', 'CHECKED_IN', 'IN_PROGRESS'];
 const NON_CANCELLED_STATUSES: AppointmentStatus[] = [
@@ -150,6 +195,52 @@ function sendError(res: Response, statusCode: number, message: string, details?:
     success: false,
     error: message,
     ...(details !== undefined ? { details } : {}),
+  });
+}
+
+function removeUploadedFile(filePath?: string) {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return;
+  }
+
+  fs.unlinkSync(filePath);
+}
+
+function handleAppointmentUploadError(error: unknown, res: Response) {
+  if (error instanceof multer.MulterError) {
+    const multerError = error as multer.MulterError;
+
+    if (multerError.code === 'LIMIT_FILE_SIZE') {
+      sendError(
+        res,
+        400,
+        `Attachment too large. Maximum file size is ${Math.floor(APPOINTMENT_ATTACHMENT_MAX_SIZE / (1024 * 1024))}MB.`
+      );
+      return true;
+    }
+
+    sendError(res, 400, `Upload error: ${multerError.message}`);
+    return true;
+  }
+
+  if (error instanceof Error) {
+    sendError(res, 400, error.message);
+    return true;
+  }
+
+  return false;
+}
+
+function storeAppointmentAttachment(req: Request, res: Response): Promise<void> {
+  return new Promise((resolve, reject) => {
+    appointmentUpload.single('attachment')(req, res, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
   });
 }
 
@@ -320,9 +411,15 @@ router.get('/', async (req: Request, res: Response) => {
 });
 
 router.post('/', async (req: Request, res: Response) => {
+  let shouldRemoveUploadedFile = false;
+
   try {
+    await storeAppointmentAttachment(req, res);
+    shouldRemoveUploadedFile = Boolean(req.file?.path);
+
     const validation = createAppointmentSchema.safeParse(req.body);
     if (!validation.success) {
+      removeUploadedFile(req.file?.path);
       sendError(res, 400, 'Validation failed', validation.error.errors);
       return;
     }
@@ -331,12 +428,16 @@ router.post('/', async (req: Request, res: Response) => {
     const customerId = req.user?.role === 'CUSTOMER' ? req.user.customerId : data.customerId;
 
     if (!customerId) {
+      removeUploadedFile(req.file?.path);
       throw new ApiError(400, 'customerId is required');
     }
 
     if (req.user?.role === 'CUSTOMER' && customerId !== req.user.customerId) {
+      removeUploadedFile(req.file?.path);
       throw new ApiError(403, 'Can only book appointments for yourself');
     }
+
+    const attachmentUrl = req.file ? path.posix.join('appointment-attachments', req.file.filename) : data.attachmentUrl;
 
     const appointment = await prisma.$transaction(async (tx) => {
       const customer = await tx.customer.findUnique({
@@ -424,7 +525,7 @@ router.post('/', async (req: Request, res: Response) => {
           staffId,
           serviceTypeId: slot.serviceTypeId,
           notes: data.notes,
-          attachmentUrl: data.attachmentUrl,
+          attachmentUrl,
           status: 'SCHEDULED',
         },
         select: APPOINTMENT_SELECT,
@@ -434,6 +535,7 @@ router.post('/', async (req: Request, res: Response) => {
 
       return createdAppointment;
     });
+    shouldRemoveUploadedFile = false;
 
     await logAudit(
       req.user?.userId,
@@ -447,6 +549,7 @@ router.post('/', async (req: Request, res: Response) => {
         staffId: appointment.staffId,
         serviceTypeId: appointment.serviceTypeId,
         status: publicStatus(appointment.status),
+        attachmentUrl: appointment.attachmentUrl,
       },
       getIpAddressFromRequest(req)
     );
@@ -457,6 +560,14 @@ router.post('/', async (req: Request, res: Response) => {
       message: 'Appointment booked successfully',
     });
   } catch (error) {
+    if (shouldRemoveUploadedFile) {
+      removeUploadedFile(req.file?.path);
+    }
+
+    if (handleAppointmentUploadError(error, res)) {
+      return;
+    }
+
     if (error instanceof ApiError) {
       sendError(res, error.statusCode, error.message);
       return;
