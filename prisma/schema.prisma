@@ -45,9 +45,9 @@ model Customer {
   id          String   @id @default(cuid())
   userId      String   @unique
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  idNumber    String?  // National ID or similar
-  dateOfBirth DateTime?
-  idImageUrl  String?  // URL/path to uploaded customer ID image (Phase 5A)
+  idNumber    String   // National ID or similar
+  dateOfBirth DateTime
+  idImageUrl  String   // URL/path to uploaded customer ID image
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   

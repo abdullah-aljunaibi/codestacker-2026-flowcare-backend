@@ -165,7 +165,7 @@ router.post('/',
         data: {
           userId: data.userId,
           idNumber: data.idNumber,
-          dateOfBirth: data.dateOfBirth ? new Date(data.dateOfBirth) : null,
+          dateOfBirth: new Date(data.dateOfBirth),
           idImageUrl: data.idImageUrl,
         },
         select: {

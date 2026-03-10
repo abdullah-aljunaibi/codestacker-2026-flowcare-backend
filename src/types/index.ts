@@ -10,6 +10,10 @@ export const registerSchema = z.object({
   firstName: z.string().min(1),
   lastName: z.string().min(1),
   phone: z.string().optional(),
+  idNumber: z.string().min(1),
+  dateOfBirth: z.string().min(1).refine((value) => !Number.isNaN(Date.parse(value)), {
+    message: 'Invalid dateOfBirth',
+  }),
 });
 
 export const loginSchema = z.object({
@@ -86,9 +90,11 @@ export type UpdateStaffInput = z.infer<typeof updateStaffSchema>;
 
 export const createCustomerSchema = z.object({
   userId: z.string(),
-  idNumber: z.string().optional(),
-  dateOfBirth: z.string().datetime().optional(),
-  idImageUrl: z.string().optional(),
+  idNumber: z.string().min(1),
+  dateOfBirth: z.string().min(1).refine((value) => !Number.isNaN(Date.parse(value)), {
+    message: 'Invalid dateOfBirth',
+  }),
+  idImageUrl: z.string().min(1),
 });
 
 export const updateCustomerSchema = createCustomerSchema.partial();

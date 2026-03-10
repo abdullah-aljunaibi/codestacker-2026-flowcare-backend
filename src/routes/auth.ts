@@ -2,17 +2,26 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcrypt';
 import { PrismaClient } from '@prisma/client';
 import { authMiddleware } from '../middleware/auth.js';
+import upload, { handleMulterError } from '../middleware/upload.js';
 import { registerSchema } from '../types/index.js';
+import fs from 'fs';
 
 const router = Router();
 const prisma = new PrismaClient();
 
+function removeUploadedFile(filePath?: string) {
+  if (filePath && fs.existsSync(filePath)) {
+    fs.unlinkSync(filePath);
+  }
+}
+
 // POST /api/auth/register
-router.post('/register', async (req: Request, res: Response) => {
+router.post('/register', upload.single('idImage'), handleMulterError, async (req: Request, res: Response) => {
   try {
     const validation = registerSchema.safeParse(req.body);
     
     if (!validation.success) {
+      removeUploadedFile(req.file?.path);
       res.status(400).json({
         success: false,
         error: 'Validation failed',
@@ -21,7 +30,15 @@ router.post('/register', async (req: Request, res: Response) => {
       return;
     }
 
-    const { email, password, firstName, lastName, phone } = validation.data;
+    if (!req.file) {
+      res.status(400).json({
+        success: false,
+        error: 'ID image file is required',
+      });
+      return;
+    }
+
+    const { email, password, firstName, lastName, phone, idNumber, dateOfBirth } = validation.data;
 
     // Check if user exists
     const existingUser = await prisma.user.findUnique({
@@ -29,6 +46,7 @@ router.post('/register', async (req: Request, res: Response) => {
     });
 
     if (existingUser) {
+      removeUploadedFile(req.file.path);
       res.status(409).json({
         success: false,
         error: 'User with this email already exists',
@@ -38,34 +56,38 @@ router.post('/register', async (req: Request, res: Response) => {
 
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
+    const idImageUrl = `/uploads/customer-ids/${req.file.filename}`;
 
-    // Create user
-    const user = await prisma.user.create({
-      data: {
-        email,
-        password: hashedPassword,
-        firstName,
-        lastName,
-        phone,
-        role: 'CUSTOMER',
-      },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        role: true,
-        createdAt: true,
-      },
-    });
+    const { user, customer } = await prisma.$transaction(async (tx) => {
+      const createdUser = await tx.user.create({
+        data: {
+          email,
+          password: hashedPassword,
+          firstName,
+          lastName,
+          phone,
+          role: 'CUSTOMER',
+        },
+        select: {
+          id: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+          role: true,
+          createdAt: true,
+        },
+      });
 
-    // If registering as CUSTOMER, create customer profile
-    const customer = await prisma.customer.create({
-      data: {
-        userId: user.id,
-        idNumber: `ID${Date.now()}`,
-        dateOfBirth: new Date('2000-01-01'),
-      },
+      const createdCustomer = await tx.customer.create({
+        data: {
+          userId: createdUser.id,
+          idNumber,
+          dateOfBirth: new Date(dateOfBirth),
+          idImageUrl,
+        },
+      });
+
+      return { user: createdUser, customer: createdCustomer };
     });
 
     res.status(201).json({
@@ -75,11 +97,15 @@ router.post('/register', async (req: Request, res: Response) => {
         customer: {
           id: customer.id,
           userId: customer.userId,
+          idNumber: customer.idNumber,
+          dateOfBirth: customer.dateOfBirth,
+          idImageUrl: customer.idImageUrl,
         },
       },
       message: 'Registration successful. Use Basic Auth with your email and password on protected routes.',
     });
   } catch (error) {
+    removeUploadedFile(req.file?.path);
     console.error('Registration error:', error);
     res.status(500).json({
       success: false,

@@ -9,7 +9,7 @@ const storage = multer.diskStorage({
     let uploadPath = 'uploads/';
     
     // Determine upload path based on file type
-    if (file.fieldname === 'customerIdImage') {
+    if (file.fieldname === 'idImage' || file.fieldname === 'customerIdImage') {
       uploadPath = 'uploads/customer-ids/';
     } else if (file.fieldname === 'appointmentAttachment') {
       uploadPath = 'uploads/appointment-attachments/';
@@ -32,23 +32,19 @@ const storage = multer.diskStorage({
 
 // File filter for validation
 const fileFilter = (req: any, file: any, cb: any) => {
-  // Allowed MIME types
-  const allowedMimeTypes = [
-    'image/jpeg',
-    'image/png',
-    'image/gif',
-    'image/webp',
-    'application/pdf',
-  ];
-  
-  // Allowed extensions
-  const allowedExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.pdf'];
+  const imageMimeTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+  const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+  const documentMimeTypes = [...imageMimeTypes, 'application/pdf'];
+  const documentExtensions = [...imageExtensions, '.pdf'];
   const ext = path.extname(file.originalname).toLowerCase();
-  
+  const isIdImageField = file.fieldname === 'idImage' || file.fieldname === 'customerIdImage';
+  const allowedMimeTypes = isIdImageField ? imageMimeTypes : documentMimeTypes;
+  const allowedExtensions = isIdImageField ? imageExtensions : documentExtensions;
+
   if (allowedMimeTypes.includes(file.mimetype) && allowedExtensions.includes(ext)) {
     cb(null, true);
   } else {
-    cb(new Error('Invalid file type. Only JPEG, PNG, GIF, WebP images and PDF files are allowed.'), false);
+    cb(new Error('Invalid file type. ID images must be JPEG, PNG, GIF, or WebP. Appointment attachments may also be PDF.'), false);
   }
 };
 
