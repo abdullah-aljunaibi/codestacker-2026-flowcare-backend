@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authMiddleware, roleMiddleware, branchScopedMiddleware } from '../middleware/auth.js';
-import { createSlotSchema, updateSlotSchema } from '../types/index.js';
+import { assignStaffToSlotSchema, createSlotSchema, updateSlotSchema } from '../types/index.js';
 import { logAudit, getIpAddressFromRequest } from '../utils/audit-logger.js';
 import { getEffectiveRetentionConfigs } from '../utils/retention-config.js';
 
@@ -87,6 +87,45 @@ function buildSlotListWhereClause(
   }
 
   return whereClause;
+}
+
+async function getSlotAssignmentContext(slotId: string) {
+  return prisma.slot.findUnique({
+    where: { id: slotId },
+    select: {
+      id: true,
+      branchId: true,
+      serviceTypeId: true,
+      deletedAt: true,
+      branch: {
+        select: {
+          id: true,
+          name: true,
+          code: true,
+        },
+      },
+      serviceType: {
+        select: {
+          id: true,
+          name: true,
+          code: true,
+        },
+      },
+    },
+  });
+}
+
+function assertCanManageSlotAssignments(req: Request, slotBranchId: string, action: 'assign' | 'unassign') {
+  if (req.user?.role === 'BRANCH_MANAGER' && req.user.branchId !== slotBranchId) {
+    const verb = action === 'assign' ? 'assign staff to' : 'unassign staff from';
+
+    return {
+      allowed: false,
+      message: `Access denied: Can only ${verb} slots in your assigned branch`,
+    };
+  }
+
+  return { allowed: true as const };
 }
 
 // GET /api/slots - Public list of bookable slots. Never returns soft-deleted rows.
@@ -474,6 +513,318 @@ router.get('/retention-preview', authMiddleware,
       res.status(500).json({
         success: false,
         error: 'Internal server error during retention preview',
+      });
+    }
+  }
+);
+
+// POST /api/slots/:id/assign-staff - Explicitly assign staff to a slot (slot-level only)
+router.post('/:id/assign-staff', authMiddleware,
+  roleMiddleware('ADMIN', 'BRANCH_MANAGER'),
+  async (req: Request, res: Response) => {
+    try {
+      const slotId = String(req.params.id);
+      const validation = assignStaffToSlotSchema.safeParse(req.body);
+
+      if (!validation.success) {
+        res.status(400).json({
+          success: false,
+          error: 'Validation failed',
+          details: validation.error.errors,
+        });
+        return;
+      }
+
+      const slot = await getSlotAssignmentContext(slotId);
+
+      if (!slot) {
+        res.status(404).json({
+          success: false,
+          error: 'Time slot not found',
+        });
+        return;
+      }
+
+      const permission = assertCanManageSlotAssignments(req, slot.branchId, 'assign');
+      if (!permission.allowed) {
+        res.status(403).json({
+          success: false,
+          error: permission.message,
+        });
+        return;
+      }
+
+      if (slot.deletedAt) {
+        res.status(400).json({
+          success: false,
+          error: 'Cannot assign staff to a soft-deleted slot',
+        });
+        return;
+      }
+
+      const staff = await prisma.staff.findUnique({
+        where: { id: validation.data.staffId },
+        select: {
+          id: true,
+          branchId: true,
+          position: true,
+          employeeId: true,
+          isManager: true,
+          user: {
+            select: {
+              id: true,
+              email: true,
+              firstName: true,
+              lastName: true,
+              role: true,
+            },
+          },
+        },
+      });
+
+      if (!staff) {
+        res.status(404).json({
+          success: false,
+          error: 'Staff member not found',
+        });
+        return;
+      }
+
+      if (staff.branchId !== slot.branchId) {
+        res.status(400).json({
+          success: false,
+          error: 'Staff member must belong to the same branch as the slot',
+        });
+        return;
+      }
+
+      const existingAssignment = await prisma.slotAssignment.findUnique({
+        where: {
+          slotId_staffId: {
+            slotId,
+            staffId: staff.id,
+          },
+        },
+        select: {
+          id: true,
+          createdAt: true,
+        },
+      });
+
+      if (existingAssignment) {
+        res.json({
+          success: true,
+          data: {
+            id: existingAssignment.id,
+            slotId,
+            staffId: staff.id,
+            assignmentScope: 'slot',
+            createdAt: existingAssignment.createdAt,
+            slot: {
+              id: slot.id,
+              branch: slot.branch,
+              serviceType: slot.serviceType,
+            },
+            staff: {
+              id: staff.id,
+              position: staff.position,
+              employeeId: staff.employeeId,
+              isManager: staff.isManager,
+              user: staff.user,
+            },
+          },
+          message: 'Staff member is already assigned to this slot',
+        });
+        return;
+      }
+
+      const assignment = await prisma.slotAssignment.create({
+        data: {
+          slotId,
+          staffId: staff.id,
+        },
+        select: {
+          id: true,
+          slotId: true,
+          staffId: true,
+          createdAt: true,
+        },
+      });
+
+      await logAudit(
+        req.user?.userId,
+        'STAFF_ASSIGNED',
+        'SlotAssignment',
+        assignment.id,
+        {
+          branchId: slot.branchId,
+          slotId: slot.id,
+          serviceTypeId: slot.serviceTypeId,
+          staffId: staff.id,
+          staffUserId: staff.user.id,
+          staffEmail: staff.user.email,
+          assignmentScope: 'slot',
+        },
+        getIpAddressFromRequest(req)
+      );
+
+      res.status(201).json({
+        success: true,
+        data: {
+          ...assignment,
+          assignmentScope: 'slot',
+          slot: {
+            id: slot.id,
+            branch: slot.branch,
+            serviceType: slot.serviceType,
+          },
+          staff: {
+            id: staff.id,
+            position: staff.position,
+            employeeId: staff.employeeId,
+            isManager: staff.isManager,
+            user: staff.user,
+          },
+        },
+        message: 'Staff assigned to slot successfully',
+      });
+    } catch (error) {
+      console.error('Error assigning staff to slot:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Internal server error',
+      });
+    }
+  }
+);
+
+// DELETE /api/slots/:id/assign-staff/:staffId - Explicitly remove staff assignment from a slot (slot-level only)
+router.delete('/:id/assign-staff/:staffId', authMiddleware,
+  roleMiddleware('ADMIN', 'BRANCH_MANAGER'),
+  async (req: Request, res: Response) => {
+    try {
+      const slotId = String(req.params.id);
+      const staffId = String(req.params.staffId);
+      const slot = await getSlotAssignmentContext(slotId);
+
+      if (!slot) {
+        res.status(404).json({
+          success: false,
+          error: 'Time slot not found',
+        });
+        return;
+      }
+
+      const permission = assertCanManageSlotAssignments(req, slot.branchId, 'unassign');
+      if (!permission.allowed) {
+        res.status(403).json({
+          success: false,
+          error: permission.message,
+        });
+        return;
+      }
+
+      const existingAssignment = await prisma.slotAssignment.findUnique({
+        where: {
+          slotId_staffId: {
+            slotId,
+            staffId,
+          },
+        },
+        select: {
+          id: true,
+          slotId: true,
+          staffId: true,
+          createdAt: true,
+          staff: {
+            select: {
+              id: true,
+              position: true,
+              employeeId: true,
+              isManager: true,
+              user: {
+                select: {
+                  id: true,
+                  email: true,
+                  firstName: true,
+                  lastName: true,
+                  role: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (!existingAssignment) {
+        res.json({
+          success: true,
+          data: {
+            slotId,
+            staffId,
+            assignmentScope: 'slot',
+            removed: false,
+          },
+          message: 'Staff member was not assigned to this slot',
+        });
+        return;
+      }
+
+      await prisma.slotAssignment.delete({
+        where: {
+          slotId_staffId: {
+            slotId,
+            staffId,
+          },
+        },
+      });
+
+      await logAudit(
+        req.user?.userId,
+        'STAFF_UNASSIGNED',
+        'SlotAssignment',
+        existingAssignment.id,
+        {
+          branchId: slot.branchId,
+          slotId: slot.id,
+          serviceTypeId: slot.serviceTypeId,
+          staffId: existingAssignment.staffId,
+          staffUserId: existingAssignment.staff.user.id,
+          staffEmail: existingAssignment.staff.user.email,
+          assignmentScope: 'slot',
+        },
+        getIpAddressFromRequest(req)
+      );
+
+      res.json({
+        success: true,
+        data: {
+          id: existingAssignment.id,
+          slotId: existingAssignment.slotId,
+          staffId: existingAssignment.staffId,
+          createdAt: existingAssignment.createdAt,
+          removed: true,
+          assignmentScope: 'slot',
+          slot: {
+            id: slot.id,
+            branch: slot.branch,
+            serviceType: slot.serviceType,
+          },
+          staff: {
+            id: existingAssignment.staff.id,
+            position: existingAssignment.staff.position,
+            employeeId: existingAssignment.staff.employeeId,
+            isManager: existingAssignment.staff.isManager,
+            user: existingAssignment.staff.user,
+          },
+        },
+        message: 'Staff unassigned from slot successfully',
+      });
+    } catch (error) {
+      console.error('Error unassigning staff from slot:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Internal server error',
       });
     }
   }

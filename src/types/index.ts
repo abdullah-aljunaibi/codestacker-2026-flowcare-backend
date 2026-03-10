@@ -124,7 +124,6 @@ export type UpdateSlotInput = z.infer<typeof updateSlotSchema>;
 // ============================================
 
 export const assignStaffToSlotSchema = z.object({
-  slotId: z.string(),
   staffId: z.string(),
 });
 

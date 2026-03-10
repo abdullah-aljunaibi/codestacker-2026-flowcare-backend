@@ -9,6 +9,7 @@ This service manages:
 - branch and service discovery
 - customer registration with ID image upload
 - appointment booking, rescheduling, cancellation, and staff workflow updates
+- explicit slot-level staff assignment and unassignment endpoints
 - branch-scoped staff/manager access control
 - slot soft-delete and retention cleanup
 - audit logging and CSV export
@@ -174,6 +175,24 @@ curl -X POST http://localhost:3000/api/slots/cleanup-retention \
   -u admin@flowcare.com:admin123
 ```
 
+Assign staff to a slot:
+
+```bash
+curl -X POST http://localhost:3000/api/slots/SLOT_ID/assign-staff \
+  -u admin@flowcare.com:admin123 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "staffId": "STAFF_ID"
+  }'
+```
+
+Remove staff from a slot:
+
+```bash
+curl -X DELETE http://localhost:3000/api/slots/SLOT_ID/assign-staff/STAFF_ID \
+  -u manager.mct-001@flowcare.com:password123
+```
+
 Export audit logs:
 
 ```bash
@@ -208,6 +227,8 @@ All JSON errors use this shape:
 - `src/bootstrap/seed.ts`: idempotent startup bootstrap from `prisma/seed-data.json`
 - `prisma/schema.prisma`: relational schema
 - `prisma/migrations/*`: deployable SQL migrations
+
+Staff assignment is slot-level only. A `SlotAssignment` links a staff member to one concrete slot; service types do not have separate assignment records.
 
 ## Verification
 

@@ -138,9 +138,11 @@ curl -X POST http://localhost:3000/api/branches \
 | `POST` | `/api/slots` | Admin, Branch Manager | Create slot |
 | `POST` | `/api/slots/cleanup-retention` | Admin | Deletes soft-deleted slots based on DB retention config |
 | `GET` | `/api/slots/retention-preview` | Admin | Preview retention cleanup |
+| `POST` | `/api/slots/:id/assign-staff` | Admin, Branch Manager | Explicitly assign a staff member to a slot; managers limited to own branch; staff must belong to the slot branch; duplicate assignment is idempotent |
 | `GET` | `/api/slots/:id` | Authenticated | Admin can include deleted slots with `includeDeleted=true` |
 | `PATCH` | `/api/slots/:id` | Admin, Branch Manager | Update slot |
 | `DELETE` | `/api/slots/:id` | Admin, Branch Manager | Soft-delete slot |
+| `DELETE` | `/api/slots/:id/assign-staff/:staffId` | Admin, Branch Manager | Explicitly remove a staff assignment from a slot; managers limited to own branch |
 | `POST` | `/api/slots/:id/restore` | Admin | Restore soft-deleted slot |
 
 Cleanup example:
@@ -149,6 +151,24 @@ Cleanup example:
 curl -X POST http://localhost:3000/api/slots/cleanup-retention \
   -u admin@flowcare.com:admin123
 ```
+
+Assign staff to a slot:
+
+```bash
+curl -X POST http://localhost:3000/api/slots/SLOT_ID/assign-staff \
+  -u admin@flowcare.com:admin123 \
+  -H "Content-Type: application/json" \
+  -d '{"staffId":"STAFF_ID"}'
+```
+
+Remove staff from a slot:
+
+```bash
+curl -X DELETE http://localhost:3000/api/slots/SLOT_ID/assign-staff/STAFF_ID \
+  -u manager.mct-001@flowcare.com:password123
+```
+
+Staff assignment scope is slot-level only. The API stores assignments in `SlotAssignment` records tied to a concrete slot, and appointment booking validates against those slot assignments. There is no separate service-level staff assignment API.
 
 ## Staff
 
