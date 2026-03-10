@@ -1,0 +1,337 @@
+{
+  "defaultAdmin": {
+    "email": "admin@flowcare.com",
+    "password": "admin123",
+    "firstName": "System",
+    "lastName": "Administrator",
+    "phone": "+96890000000"
+  },
+  "branches": [
+    {
+      "code": "MCT-001",
+      "name": "Muscat Main Branch",
+      "address": "Al Khuwair Street, Building 123",
+      "city": "Muscat",
+      "phone": "+96824000000",
+      "email": "muscat@flowcare.com",
+      "timezone": "Asia/Muscat",
+      "isActive": true
+    },
+    {
+      "code": "SLL-001",
+      "name": "Salalah Branch",
+      "address": "Al Dahna Street, Building 456",
+      "city": "Salalah",
+      "phone": "+96823000000",
+      "email": "salalah@flowcare.com",
+      "timezone": "Asia/Muscat",
+      "isActive": true
+    }
+  ],
+  "serviceTypes": [
+    {
+      "branchCode": "MCT-001",
+      "code": "LIC-REN",
+      "name": "License Renewal",
+      "description": "Renew driving license or vehicle registration",
+      "duration": 15,
+      "isActive": true
+    },
+    {
+      "branchCode": "MCT-001",
+      "code": "DOC-PROC",
+      "name": "Document Processing",
+      "description": "Process official documents and certificates",
+      "duration": 20,
+      "isActive": true
+    },
+    {
+      "branchCode": "MCT-001",
+      "code": "GEN-INQ",
+      "name": "General Inquiry",
+      "description": "General customer service and inquiries",
+      "duration": 10,
+      "isActive": true
+    },
+    {
+      "branchCode": "SLL-001",
+      "code": "LIC-REN",
+      "name": "License Renewal",
+      "description": "Renew driving license or vehicle registration",
+      "duration": 15,
+      "isActive": true
+    },
+    {
+      "branchCode": "SLL-001",
+      "code": "DOC-PROC",
+      "name": "Document Processing",
+      "description": "Process official documents and certificates",
+      "duration": 20,
+      "isActive": true
+    },
+    {
+      "branchCode": "SLL-001",
+      "code": "GEN-INQ",
+      "name": "General Inquiry",
+      "description": "General customer service and inquiries",
+      "duration": 10,
+      "isActive": true
+    }
+  ],
+  "staff": [
+    {
+      "email": "manager.mct-001@flowcare.com",
+      "password": "password123",
+      "firstName": "Branch",
+      "lastName": "Manager MCT-001",
+      "phone": "+96891000001",
+      "role": "BRANCH_MANAGER",
+      "branchCode": "MCT-001",
+      "position": "Branch Manager",
+      "employeeId": "EMP-MCT-001-MGR",
+      "isManager": true
+    },
+    {
+      "email": "staff1.mct-001@flowcare.com",
+      "password": "password123",
+      "firstName": "Staff 1",
+      "lastName": "MCT-001",
+      "phone": "+96891000002",
+      "role": "STAFF",
+      "branchCode": "MCT-001",
+      "position": "Service Representative",
+      "employeeId": "EMP-MCT-001-001",
+      "isManager": false
+    },
+    {
+      "email": "staff2.mct-001@flowcare.com",
+      "password": "password123",
+      "firstName": "Staff 2",
+      "lastName": "MCT-001",
+      "phone": "+96891000003",
+      "role": "STAFF",
+      "branchCode": "MCT-001",
+      "position": "Service Representative",
+      "employeeId": "EMP-MCT-001-002",
+      "isManager": false
+    },
+    {
+      "email": "manager.sll-001@flowcare.com",
+      "password": "password123",
+      "firstName": "Branch",
+      "lastName": "Manager SLL-001",
+      "phone": "+96891000004",
+      "role": "BRANCH_MANAGER",
+      "branchCode": "SLL-001",
+      "position": "Branch Manager",
+      "employeeId": "EMP-SLL-001-MGR",
+      "isManager": true
+    },
+    {
+      "email": "staff1.sll-001@flowcare.com",
+      "password": "password123",
+      "firstName": "Staff 1",
+      "lastName": "SLL-001",
+      "phone": "+96891000005",
+      "role": "STAFF",
+      "branchCode": "SLL-001",
+      "position": "Service Representative",
+      "employeeId": "EMP-SLL-001-001",
+      "isManager": false
+    },
+    {
+      "email": "staff2.sll-001@flowcare.com",
+      "password": "password123",
+      "firstName": "Staff 2",
+      "lastName": "SLL-001",
+      "phone": "+96891000006",
+      "role": "STAFF",
+      "branchCode": "SLL-001",
+      "position": "Service Representative",
+      "employeeId": "EMP-SLL-001-002",
+      "isManager": false
+    }
+  ],
+  "slots": [
+    {
+      "branchCode": "MCT-001",
+      "serviceTypeCode": "LIC-REN",
+      "dayOffset": 1,
+      "startTime": "09:00",
+      "endTime": "09:30",
+      "capacity": 1,
+      "assignedStaffEmails": ["manager.mct-001@flowcare.com"]
+    },
+    {
+      "branchCode": "MCT-001",
+      "serviceTypeCode": "LIC-REN",
+      "dayOffset": 1,
+      "startTime": "10:00",
+      "endTime": "10:30",
+      "capacity": 1,
+      "assignedStaffEmails": ["staff1.mct-001@flowcare.com"]
+    },
+    {
+      "branchCode": "MCT-001",
+      "serviceTypeCode": "DOC-PROC",
+      "dayOffset": 1,
+      "startTime": "11:00",
+      "endTime": "11:30",
+      "capacity": 1,
+      "assignedStaffEmails": ["staff2.mct-001@flowcare.com"]
+    },
+    {
+      "branchCode": "MCT-001",
+      "serviceTypeCode": "GEN-INQ",
+      "dayOffset": 1,
+      "startTime": "12:00",
+      "endTime": "12:30",
+      "capacity": 2,
+      "assignedStaffEmails": ["staff1.mct-001@flowcare.com", "staff2.mct-001@flowcare.com"]
+    },
+    {
+      "branchCode": "MCT-001",
+      "serviceTypeCode": "LIC-REN",
+      "dayOffset": 2,
+      "startTime": "09:00",
+      "endTime": "09:30",
+      "capacity": 1,
+      "assignedStaffEmails": ["manager.mct-001@flowcare.com"]
+    },
+    {
+      "branchCode": "MCT-001",
+      "serviceTypeCode": "DOC-PROC",
+      "dayOffset": 2,
+      "startTime": "10:00",
+      "endTime": "10:30",
+      "capacity": 1,
+      "assignedStaffEmails": ["staff1.mct-001@flowcare.com"]
+    },
+    {
+      "branchCode": "MCT-001",
+      "serviceTypeCode": "GEN-INQ",
+      "dayOffset": 2,
+      "startTime": "11:00",
+      "endTime": "11:30",
+      "capacity": 2,
+      "assignedStaffEmails": ["staff2.mct-001@flowcare.com"]
+    },
+    {
+      "branchCode": "MCT-001",
+      "serviceTypeCode": "LIC-REN",
+      "dayOffset": 3,
+      "startTime": "09:00",
+      "endTime": "09:30",
+      "capacity": 1,
+      "assignedStaffEmails": ["staff1.mct-001@flowcare.com"]
+    },
+    {
+      "branchCode": "MCT-001",
+      "serviceTypeCode": "DOC-PROC",
+      "dayOffset": 3,
+      "startTime": "10:00",
+      "endTime": "10:30",
+      "capacity": 1,
+      "assignedStaffEmails": ["manager.mct-001@flowcare.com"]
+    },
+    {
+      "branchCode": "MCT-001",
+      "serviceTypeCode": "GEN-INQ",
+      "dayOffset": 3,
+      "startTime": "11:00",
+      "endTime": "11:30",
+      "capacity": 2,
+      "assignedStaffEmails": ["staff2.mct-001@flowcare.com"]
+    },
+    {
+      "branchCode": "SLL-001",
+      "serviceTypeCode": "LIC-REN",
+      "dayOffset": 1,
+      "startTime": "09:00",
+      "endTime": "09:30",
+      "capacity": 1,
+      "assignedStaffEmails": ["manager.sll-001@flowcare.com"]
+    },
+    {
+      "branchCode": "SLL-001",
+      "serviceTypeCode": "LIC-REN",
+      "dayOffset": 1,
+      "startTime": "10:00",
+      "endTime": "10:30",
+      "capacity": 1,
+      "assignedStaffEmails": ["staff1.sll-001@flowcare.com"]
+    },
+    {
+      "branchCode": "SLL-001",
+      "serviceTypeCode": "DOC-PROC",
+      "dayOffset": 1,
+      "startTime": "11:00",
+      "endTime": "11:30",
+      "capacity": 1,
+      "assignedStaffEmails": ["staff2.sll-001@flowcare.com"]
+    },
+    {
+      "branchCode": "SLL-001",
+      "serviceTypeCode": "GEN-INQ",
+      "dayOffset": 1,
+      "startTime": "12:00",
+      "endTime": "12:30",
+      "capacity": 2,
+      "assignedStaffEmails": ["staff1.sll-001@flowcare.com", "staff2.sll-001@flowcare.com"]
+    },
+    {
+      "branchCode": "SLL-001",
+      "serviceTypeCode": "LIC-REN",
+      "dayOffset": 2,
+      "startTime": "09:00",
+      "endTime": "09:30",
+      "capacity": 1,
+      "assignedStaffEmails": ["manager.sll-001@flowcare.com"]
+    },
+    {
+      "branchCode": "SLL-001",
+      "serviceTypeCode": "DOC-PROC",
+      "dayOffset": 2,
+      "startTime": "10:00",
+      "endTime": "10:30",
+      "capacity": 1,
+      "assignedStaffEmails": ["staff1.sll-001@flowcare.com"]
+    },
+    {
+      "branchCode": "SLL-001",
+      "serviceTypeCode": "GEN-INQ",
+      "dayOffset": 2,
+      "startTime": "11:00",
+      "endTime": "11:30",
+      "capacity": 2,
+      "assignedStaffEmails": ["staff2.sll-001@flowcare.com"]
+    },
+    {
+      "branchCode": "SLL-001",
+      "serviceTypeCode": "LIC-REN",
+      "dayOffset": 3,
+      "startTime": "09:00",
+      "endTime": "09:30",
+      "capacity": 1,
+      "assignedStaffEmails": ["staff1.sll-001@flowcare.com"]
+    },
+    {
+      "branchCode": "SLL-001",
+      "serviceTypeCode": "DOC-PROC",
+      "dayOffset": 3,
+      "startTime": "10:00",
+      "endTime": "10:30",
+      "capacity": 1,
+      "assignedStaffEmails": ["manager.sll-001@flowcare.com"]
+    },
+    {
+      "branchCode": "SLL-001",
+      "serviceTypeCode": "GEN-INQ",
+      "dayOffset": 3,
+      "startTime": "11:00",
+      "endTime": "11:30",
+      "capacity": 2,
+      "assignedStaffEmails": ["staff2.sll-001@flowcare.com"]
+    }
+  ]
+}

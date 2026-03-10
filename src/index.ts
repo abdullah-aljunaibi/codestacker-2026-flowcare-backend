@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import path from 'path';
+import { bootstrapDatabase } from './bootstrap/seed.js';
 
 // Route imports
 import authRoutes from './routes/auth.js';
@@ -79,11 +79,24 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
   });
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`🚀 FlowCare Backend running on port ${PORT}`);
-  console.log(`📍 Health: http://localhost:${PORT}/health`);
-  console.log(`📍 API: http://localhost:${PORT}/api`);
+async function startServer() {
+  console.log('[bootstrap] starting startup bootstrap');
+  const bootstrapResult = await bootstrapDatabase({
+    logger: console,
+    createAdminIfMissingOnly: true,
+  });
+  console.log('[bootstrap] startup bootstrap complete', bootstrapResult);
+
+  app.listen(PORT, () => {
+    console.log(`🚀 FlowCare Backend running on port ${PORT}`);
+    console.log(`📍 Health: http://localhost:${PORT}/health`);
+    console.log(`📍 API: http://localhost:${PORT}/api`);
+  });
+}
+
+startServer().catch((error) => {
+  console.error('[bootstrap] startup bootstrap failed', error);
+  process.exit(1);
 });
 
 export default app;
