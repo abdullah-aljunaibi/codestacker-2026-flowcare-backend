@@ -135,17 +135,29 @@ export type AssignStaffToSlotInput = z.infer<typeof assignStaffToSlotSchema>;
 // ============================================
 
 export const createAppointmentSchema = z.object({
-  branchId: z.string(),
+  branchId: z.string().optional(),
   customerId: z.string().optional(),
   slotId: z.string(),
   staffId: z.string().optional(),
-  serviceTypeId: z.string(),
+  serviceTypeId: z.string().optional(),
   notes: z.string().optional(),
   attachmentUrl: z.string().optional(),
 });
 
 export const updateAppointmentSchema = z.object({
-  status: z.enum(['SCHEDULED', 'CHECKED_IN', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'NO_SHOW']).optional(),
+  status: z.enum([
+    'WAITING',
+    'SERVING',
+    'DONE',
+    'CANCELLED',
+    'SCHEDULED',
+    'CHECKED_IN',
+    'IN_PROGRESS',
+    'COMPLETED',
+    'NO_SHOW',
+  ]).optional(),
+  slotId: z.string().optional(),
+  staffId: z.string().optional(),
   notes: z.string().optional(),
   cancelReason: z.string().optional(),
   checkedInAt: z.string().datetime().optional(),

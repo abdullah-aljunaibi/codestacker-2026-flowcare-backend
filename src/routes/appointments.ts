@@ -1,650 +1,810 @@
-import { Router, Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
-import { authMiddleware, roleMiddleware, ownershipMiddleware } from '../middleware/auth.js';
+import { AppointmentStatus, Prisma, PrismaClient } from '@prisma/client';
+import { Request, Response, Router } from 'express';
+import { authMiddleware } from '../middleware/auth.js';
 import { createAppointmentSchema, updateAppointmentSchema } from '../types/index.js';
-import { logAudit, getIpAddressFromRequest } from '../utils/audit-logger.js';
+import { getIpAddressFromRequest, logAudit } from '../utils/audit-logger.js';
 
 const router = Router();
 const prisma = new PrismaClient();
 
-// All appointment routes require authentication
+const ACTIVE_SLOT_STATUSES: AppointmentStatus[] = ['SCHEDULED', 'CHECKED_IN', 'IN_PROGRESS'];
+const NON_CANCELLED_STATUSES: AppointmentStatus[] = [
+  'SCHEDULED',
+  'CHECKED_IN',
+  'IN_PROGRESS',
+  'COMPLETED',
+  'NO_SHOW',
+];
+const APPOINTMENT_SELECT = {
+  id: true,
+  branchId: true,
+  customerId: true,
+  slotId: true,
+  staffId: true,
+  serviceTypeId: true,
+  status: true,
+  notes: true,
+  attachmentUrl: true,
+  checkedInAt: true,
+  startedAt: true,
+  completedAt: true,
+  cancelledAt: true,
+  cancelReason: true,
+  createdAt: true,
+  updatedAt: true,
+  branch: {
+    select: {
+      id: true,
+      name: true,
+      code: true,
+      address: true,
+      city: true,
+      phone: true,
+    },
+  },
+  customer: {
+    select: {
+      id: true,
+      user: {
+        select: {
+          firstName: true,
+          lastName: true,
+          email: true,
+          phone: true,
+        },
+      },
+    },
+  },
+  slot: {
+    select: {
+      id: true,
+      startTime: true,
+      endTime: true,
+      capacity: true,
+      serviceType: {
+        select: {
+          id: true,
+          name: true,
+          code: true,
+          duration: true,
+          description: true,
+        },
+      },
+    },
+  },
+  staff: {
+    select: {
+      id: true,
+      position: true,
+      user: {
+        select: {
+          firstName: true,
+          lastName: true,
+          email: true,
+        },
+      },
+    },
+  },
+} as const;
+
+type AppointmentRecord = Prisma.AppointmentGetPayload<{ select: typeof APPOINTMENT_SELECT }>;
+
+class ApiError extends Error {
+  statusCode: number;
+
+  constructor(statusCode: number, message: string) {
+    super(message);
+    this.statusCode = statusCode;
+  }
+}
+
+function normalizeStatusInput(status?: string): AppointmentStatus | undefined {
+  if (!status) {
+    return undefined;
+  }
+
+  switch (status) {
+    case 'WAITING':
+      return 'SCHEDULED';
+    case 'SERVING':
+      return 'IN_PROGRESS';
+    case 'DONE':
+      return 'COMPLETED';
+    case 'SCHEDULED':
+    case 'CHECKED_IN':
+    case 'IN_PROGRESS':
+    case 'COMPLETED':
+    case 'CANCELLED':
+    case 'NO_SHOW':
+      return status;
+    default:
+      return undefined;
+  }
+}
+
+function publicStatus(status: AppointmentStatus): 'WAITING' | 'SERVING' | 'DONE' | 'CANCELLED' | 'NO_SHOW' {
+  switch (status) {
+    case 'SCHEDULED':
+    case 'CHECKED_IN':
+      return 'WAITING';
+    case 'IN_PROGRESS':
+      return 'SERVING';
+    case 'COMPLETED':
+      return 'DONE';
+    case 'CANCELLED':
+      return 'CANCELLED';
+    case 'NO_SHOW':
+      return 'NO_SHOW';
+  }
+}
+
+function serializeAppointment(appointment: NonNullable<AppointmentRecord>) {
+  return {
+    ...appointment,
+    status: publicStatus(appointment.status),
+  };
+}
+
+function sendError(res: Response, statusCode: number, message: string, details?: unknown) {
+  res.status(statusCode).json({
+    success: false,
+    error: message,
+    ...(details !== undefined ? { details } : {}),
+  });
+}
+
+async function getAppointmentOrThrow(id: string) {
+  const appointment = await prisma.appointment.findUnique({
+    where: { id },
+    select: APPOINTMENT_SELECT,
+  });
+
+  if (!appointment) {
+    throw new ApiError(404, 'Appointment not found');
+  }
+
+  return appointment;
+}
+
+function assertAppointmentReadAccess(req: Request, appointment: NonNullable<AppointmentRecord>) {
+  if (req.user?.role === 'CUSTOMER' && appointment.customerId !== req.user.customerId) {
+    throw new ApiError(403, 'Access denied: You can only access your own appointments');
+  }
+
+  if (
+    (req.user?.role === 'BRANCH_MANAGER' || req.user?.role === 'STAFF') &&
+    appointment.branchId !== req.user.branchId
+  ) {
+    throw new ApiError(403, 'Access denied: Cannot access appointments outside your branch');
+  }
+}
+
+function assertAppointmentCancellationAccess(req: Request, appointment: NonNullable<AppointmentRecord>) {
+  assertAppointmentReadAccess(req, appointment);
+
+  if (req.user?.role === 'STAFF' && appointment.staffId !== req.user.staffId) {
+    throw new ApiError(403, 'Staff can only cancel appointments assigned to them');
+  }
+}
+
+function assertAppointmentStatusAccess(req: Request, appointment: NonNullable<AppointmentRecord>) {
+  if (req.user?.role === 'CUSTOMER') {
+    throw new ApiError(403, 'Customers cannot update appointment status');
+  }
+
+  assertAppointmentReadAccess(req, appointment);
+
+  if (req.user?.role === 'STAFF' && appointment.staffId !== req.user.staffId) {
+    throw new ApiError(403, 'Staff can only update status for appointments assigned to them');
+  }
+}
+
+function assertValidStatusTransition(currentStatus: AppointmentStatus, nextStatus: AppointmentStatus) {
+  if (currentStatus === nextStatus) {
+    return;
+  }
+
+  const current = publicStatus(currentStatus);
+  const next = publicStatus(nextStatus);
+  const validTransitions = new Map<string, string[]>([
+    ['WAITING', ['SERVING', 'CANCELLED']],
+    ['SERVING', ['DONE', 'CANCELLED']],
+    ['DONE', []],
+    ['CANCELLED', []],
+    ['NO_SHOW', []],
+  ]);
+
+  if (!validTransitions.get(current)?.includes(next)) {
+    throw new ApiError(400, `Invalid appointment status transition: ${current} -> ${next}`);
+  }
+}
+
+async function syncSlotBookedCount(tx: PrismaClient | Prisma.TransactionClient, slotId: string) {
+  const activeCount = await tx.appointment.count({
+    where: {
+      slotId,
+      status: { in: ACTIVE_SLOT_STATUSES },
+    },
+  });
+
+  await tx.slot.update({
+    where: { id: slotId },
+    data: { bookedCount: activeCount },
+  });
+}
+
+async function resolveBookingStaffId(
+  tx: PrismaClient | Prisma.TransactionClient,
+  slot: {
+    branchId: string;
+    assignments: Array<{ staffId: string }>;
+  },
+  requestedStaffId?: string
+) {
+  if (!requestedStaffId) {
+    return slot.assignments.length === 1 ? slot.assignments[0].staffId : null;
+  }
+
+  const staff = await tx.staff.findUnique({
+    where: { id: requestedStaffId },
+    select: { id: true, branchId: true },
+  });
+
+  if (!staff || staff.branchId !== slot.branchId) {
+    throw new ApiError(400, 'Assigned staff member is invalid for the selected slot');
+  }
+
+  if (slot.assignments.length > 0 && !slot.assignments.some((assignment) => assignment.staffId === requestedStaffId)) {
+    throw new ApiError(400, 'Assigned staff member is not assigned to the selected slot');
+  }
+
+  return staff.id;
+}
+
 router.use(authMiddleware);
 
-// GET /api/appointments - List appointments
-// ADMIN: all appointments
-// BRANCH_MANAGER/STAFF: appointments at their branch
-// CUSTOMER: their own appointments only
 router.get('/', async (req: Request, res: Response) => {
   try {
     const { status, branchId, startDate, endDate } = req.query;
-    
-    let whereClause: any = {};
-    
-    // Role-based filtering
+    const whereClause: Record<string, unknown> = {};
+
     if (req.user?.role === 'CUSTOMER') {
-      // CUSTOMER can only see their own appointments
-      if (!req.user?.customerId) {
-        res.status(403).json({
-          success: false,
-          error: 'Customer profile not found',
-        });
-        return;
+      if (!req.user.customerId) {
+        throw new ApiError(403, 'Customer profile not found');
       }
       whereClause.customerId = req.user.customerId;
     } else if (req.user?.role === 'BRANCH_MANAGER' || req.user?.role === 'STAFF') {
-      // BRANCH_MANAGER/STAFF can only see appointments at their branch
-      if (req.user?.branchId) {
-        whereClause.branchId = req.user.branchId;
-      }
+      whereClause.branchId = req.user.branchId;
     }
-    // ADMIN can see all appointments (no filter)
-    
-    // Additional filters
-    if (status) {
-      whereClause.status = status;
+
+    const normalizedStatus = normalizeStatusInput(status as string | undefined);
+    if (status && !normalizedStatus) {
+      throw new ApiError(400, 'Invalid appointment status filter');
     }
-    
+    if (normalizedStatus) {
+      whereClause.status = normalizedStatus;
+    }
+
     if (branchId && req.user?.role === 'ADMIN') {
-      // Only ADMIN can filter by arbitrary branch
       whereClause.branchId = branchId;
     }
-    
+
     if (startDate || endDate) {
-      whereClause.slot = whereClause.slot || {};
-      whereClause.slot.startTime = {};
-      if (startDate) {
-        whereClause.slot.startTime.gte = new Date(startDate as string);
-      }
-      if (endDate) {
-        whereClause.slot.startTime.lte = new Date(endDate as string);
-      }
+      whereClause.slot = {
+        startTime: {
+          ...(startDate ? { gte: new Date(startDate as string) } : {}),
+          ...(endDate ? { lte: new Date(endDate as string) } : {}),
+        },
+      };
     }
-    
+
     const appointments = await prisma.appointment.findMany({
       where: whereClause,
-      select: {
-        id: true,
-        status: true,
-        notes: true,
-        attachmentUrl: true,
-        checkedInAt: true,
-        startedAt: true,
-        completedAt: true,
-        cancelledAt: true,
-        createdAt: true,
-        branch: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-          },
-        },
-        customer: {
-          select: {
-            id: true,
-            user: {
-              select: {
-                firstName: true,
-                lastName: true,
-                email: true,
-                phone: true,
-              },
-            },
-          },
-        },
-        slot: {
-          select: {
-            id: true,
-            startTime: true,
-            endTime: true,
-            serviceType: {
-              select: {
-                name: true,
-                code: true,
-                duration: true,
-              },
-            },
-          },
-        },
-        staff: {
-          select: {
-            id: true,
-            user: {
-              select: {
-                firstName: true,
-                lastName: true,
-              },
-            },
-          },
-        },
-      },
-      orderBy: { createdAt: 'desc' },
+      select: APPOINTMENT_SELECT,
+      orderBy: [{ slot: { startTime: 'asc' } }, { createdAt: 'desc' }],
     });
-    
+
     res.json({
       success: true,
-      data: appointments,
+      data: appointments.map((appointment) => serializeAppointment(appointment)),
     });
   } catch (error) {
+    if (error instanceof ApiError) {
+      sendError(res, error.statusCode, error.message);
+      return;
+    }
+
     console.error('Error listing appointments:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Internal server error',
-    });
+    sendError(res, 500, 'Internal server error');
   }
 });
 
-// POST /api/appointments - Create appointment
-// CUSTOMER: can book for themselves
-// BRANCH_MANAGER/STAFF: can book for customers at their branch
-// ADMIN: can book anywhere
 router.post('/', async (req: Request, res: Response) => {
   try {
     const validation = createAppointmentSchema.safeParse(req.body);
-    
     if (!validation.success) {
-      res.status(400).json({
-        success: false,
-        error: 'Validation failed',
-        details: validation.error.errors,
-      });
+      sendError(res, 400, 'Validation failed', validation.error.errors);
       return;
     }
-    
+
     const data = validation.data;
-    
-    // Auto-fill customerId from JWT for CUSTOMER role
-    if (req.user?.role === 'CUSTOMER' && !data.customerId) {
-      data.customerId = req.user.customerId;
+    const customerId = req.user?.role === 'CUSTOMER' ? req.user.customerId : data.customerId;
+
+    if (!customerId) {
+      throw new ApiError(400, 'customerId is required');
     }
-    
-    // Role-based access control
-    if (req.user?.role === 'CUSTOMER') {
-      // CUSTOMER can only book for themselves
-      if (!req.user?.customerId) {
-        res.status(403).json({
-          success: false,
-          error: 'Customer profile not found',
-        });
-        return;
-      }
-      if (data.customerId !== req.user.customerId) {
-        res.status(403).json({
-          success: false,
-          error: 'Can only book appointments for yourself',
-        });
-        return;
-      }
-    } else if (req.user?.role === 'BRANCH_MANAGER' || req.user?.role === 'STAFF') {
-      // BRANCH_MANAGER/STAFF can only book at their branch
-      if (req.user?.branchId && data.branchId !== req.user.branchId) {
-        res.status(403).json({
-          success: false,
-          error: 'Can only book appointments at your assigned branch',
-        });
-        return;
-      }
+
+    if (req.user?.role === 'CUSTOMER' && customerId !== req.user.customerId) {
+      throw new ApiError(403, 'Can only book appointments for yourself');
     }
-    // ADMIN can book anywhere (no restrictions)
-    
-    // Check if slot exists and has capacity
-    const slot = await prisma.slot.findUnique({
-      where: { id: data.slotId },
-      select: {
-        id: true,
-        capacity: true,
-        bookedCount: true,
-        isActive: true,
-        branchId: true,
-        serviceTypeId: true,
-        startTime: true,
-        endTime: true,
-      },
-    });
-    
-    if (!slot) {
-      res.status(404).json({
-        success: false,
-        error: 'Time slot not found',
-      });
-      return;
-    }
-    
-    if (!slot.isActive) {
-      res.status(400).json({
-        success: false,
-        error: 'This time slot is no longer available',
-      });
-      return;
-    }
-    
-    if (slot.bookedCount >= slot.capacity) {
-      res.status(400).json({
-        success: false,
-        error: 'Time slot is fully booked',
-      });
-      return;
-    }
-    
-    // Verify service type matches slot
-    if (data.serviceTypeId !== slot.serviceTypeId) {
-      res.status(400).json({
-        success: false,
-        error: 'Service type does not match the selected time slot',
-      });
-      return;
-    }
-    
-    // Create appointment with transaction
+
     const appointment = await prisma.$transaction(async (tx) => {
-      // Increment booked count
-      await tx.slot.update({
-        where: { id: data.slotId },
-        data: { bookedCount: slot.bookedCount + 1 },
+      const customer = await tx.customer.findUnique({
+        where: { id: customerId },
+        select: { id: true },
       });
-      
-      // Create appointment
-      return tx.appointment.create({
+
+      if (!customer) {
+        throw new ApiError(404, 'Customer not found');
+      }
+
+      const slot = await tx.slot.findUnique({
+        where: { id: data.slotId },
+        select: {
+          id: true,
+          branchId: true,
+          serviceTypeId: true,
+          capacity: true,
+          isActive: true,
+          deletedAt: true,
+          startTime: true,
+          assignments: {
+            select: {
+              staffId: true,
+            },
+          },
+        },
+      });
+
+      if (!slot) {
+        throw new ApiError(404, 'Time slot not found');
+      }
+
+      if (!slot.isActive || slot.deletedAt) {
+        throw new ApiError(400, 'This time slot is no longer available');
+      }
+
+      if (data.branchId && data.branchId !== slot.branchId) {
+        throw new ApiError(400, 'Branch does not match the selected time slot');
+      }
+
+      if (data.serviceTypeId && data.serviceTypeId !== slot.serviceTypeId) {
+        throw new ApiError(400, 'Service type does not match the selected time slot');
+      }
+
+      if (
+        (req.user?.role === 'BRANCH_MANAGER' || req.user?.role === 'STAFF') &&
+        req.user.branchId !== slot.branchId
+      ) {
+        throw new ApiError(403, 'Can only book appointments at your assigned branch');
+      }
+
+      const [activeCount, duplicate] = await Promise.all([
+        tx.appointment.count({
+          where: {
+            slotId: slot.id,
+            status: { in: ACTIVE_SLOT_STATUSES },
+          },
+        }),
+        tx.appointment.findFirst({
+          where: {
+            slotId: slot.id,
+            customerId,
+            status: { in: NON_CANCELLED_STATUSES },
+          },
+          select: { id: true },
+        }),
+      ]);
+
+      if (activeCount >= slot.capacity) {
+        throw new ApiError(400, 'Time slot is fully booked');
+      }
+
+      if (duplicate) {
+        throw new ApiError(409, 'Customer already has an appointment for this slot');
+      }
+
+      const staffId = await resolveBookingStaffId(tx, slot, data.staffId);
+
+      const createdAppointment = await tx.appointment.create({
         data: {
-          branchId: data.branchId,
-          customerId: data.customerId,
-          slotId: data.slotId,
-          staffId: data.staffId,
-          serviceTypeId: data.serviceTypeId,
+          branchId: slot.branchId,
+          customerId,
+          slotId: slot.id,
+          staffId,
+          serviceTypeId: slot.serviceTypeId,
           notes: data.notes,
           attachmentUrl: data.attachmentUrl,
           status: 'SCHEDULED',
         },
-        select: {
-          id: true,
-          status: true,
-          notes: true,
-          attachmentUrl: true,
-          createdAt: true,
-          branch: {
-            select: {
-              id: true,
-              name: true,
-              code: true,
-            },
-          },
-          customer: {
-            select: {
-              id: true,
-              user: {
-                select: {
-                  firstName: true,
-                  lastName: true,
-                  email: true,
-                },
-              },
-            },
-          },
-          slot: {
-            select: {
-              id: true,
-              startTime: true,
-              endTime: true,
-              serviceType: {
-                select: {
-                  name: true,
-                  code: true,
-                },
-              },
-            },
-          },
-        },
+        select: APPOINTMENT_SELECT,
       });
+
+      await syncSlotBookedCount(tx, slot.id);
+
+      return createdAppointment;
     });
-    
-    // Audit log: appointment created
+
     await logAudit(
       req.user?.userId,
       'APPOINTMENT_CREATED',
       'Appointment',
       appointment.id,
       {
-        branchId: data.branchId,
-        customerId: data.customerId,
-        slotId: data.slotId,
-        serviceTypeId: data.serviceTypeId,
-        status: 'SCHEDULED',
+        branchId: appointment.branchId,
+        customerId: appointment.customerId,
+        slotId: appointment.slotId,
+        staffId: appointment.staffId,
+        serviceTypeId: appointment.serviceTypeId,
+        status: publicStatus(appointment.status),
       },
       getIpAddressFromRequest(req)
     );
-    
+
     res.status(201).json({
       success: true,
-      data: appointment,
+      data: serializeAppointment(appointment),
       message: 'Appointment booked successfully',
     });
   } catch (error) {
+    if (error instanceof ApiError) {
+      sendError(res, error.statusCode, error.message);
+      return;
+    }
+
     console.error('Error creating appointment:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Internal server error',
-    });
+    sendError(res, 500, 'Internal server error');
   }
 });
 
-// GET /api/appointments/:id - Get appointment details
-router.get('/:id',
-  ownershipMiddleware('appointment', 'id'),
-  async (req: Request, res: Response) => {
-    try {
-      const id = String(req.params.id);
-      
-      const appointment = await prisma.appointment.findUnique({
-        where: { id },
-        select: {
-          id: true,
-          status: true,
-          notes: true,
-          attachmentUrl: true,
-          checkedInAt: true,
-          startedAt: true,
-          completedAt: true,
-          cancelledAt: true,
-          cancelReason: true,
-          createdAt: true,
-          updatedAt: true,
-          branch: {
-            select: {
-              id: true,
-              name: true,
-              code: true,
-              address: true,
-              city: true,
-              phone: true,
-            },
-          },
-          customer: {
-            select: {
-              id: true,
-              user: {
-                select: {
-                  firstName: true,
-                  lastName: true,
-                  email: true,
-                  phone: true,
-                },
-              },
-            },
-          },
-          slot: {
-            select: {
-              id: true,
-              startTime: true,
-              endTime: true,
-              serviceType: {
-                select: {
-                  name: true,
-                  code: true,
-                  duration: true,
-                  description: true,
-                },
-              },
-            },
-          },
-          staff: {
-            select: {
-              id: true,
-              user: {
-                select: {
-                  firstName: true,
-                  lastName: true,
-                },
-              },
-              position: true,
-            },
-          },
-        },
-      });
-      
-      if (!appointment) {
-        res.status(404).json({
-          success: false,
-          error: 'Appointment not found',
-        });
-        return;
-      }
-      
-      res.json({
-        success: true,
-        data: appointment,
-      });
-    } catch (error) {
-      console.error('Error getting appointment:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Internal server error',
-      });
-    }
-  }
-);
+router.get('/:id', async (req: Request, res: Response) => {
+  try {
+    const appointment = await getAppointmentOrThrow(String(req.params.id));
+    assertAppointmentReadAccess(req, appointment);
 
-// PATCH /api/appointments/:id - Update appointment
-// Supports: status updates, check-in, cancellation
-router.patch('/:id',
-  ownershipMiddleware('appointment', 'id'),
-  async (req: Request, res: Response) => {
-    try {
-      const id = String(req.params.id);
-      const validation = updateAppointmentSchema.safeParse(req.body);
-      
-      if (!validation.success) {
-        res.status(400).json({
-          success: false,
-          error: 'Validation failed',
-          details: validation.error.errors,
-        });
-        return;
+    res.json({
+      success: true,
+      data: serializeAppointment(appointment),
+    });
+  } catch (error) {
+    if (error instanceof ApiError) {
+      sendError(res, error.statusCode, error.message);
+      return;
+    }
+
+    console.error('Error getting appointment:', error);
+    sendError(res, 500, 'Internal server error');
+  }
+});
+
+router.patch('/:id', async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id);
+    const validation = updateAppointmentSchema.safeParse(req.body);
+    if (!validation.success) {
+      sendError(res, 400, 'Validation failed', validation.error.errors);
+      return;
+    }
+
+    const appointment = await getAppointmentOrThrow(id);
+    const updateData = validation.data;
+    const requestedStatus = normalizeStatusInput(updateData.status);
+
+    if (updateData.status && !requestedStatus) {
+      throw new ApiError(400, 'Invalid appointment status');
+    }
+
+    const isReschedule = typeof updateData.slotId === 'string' && updateData.slotId.length > 0;
+    const isStatusChange = !!requestedStatus && requestedStatus !== appointment.status;
+
+    if (isReschedule && isStatusChange) {
+      throw new ApiError(400, 'Cannot reschedule and update status in the same request');
+    }
+
+    if (isReschedule) {
+      assertAppointmentReadAccess(req, appointment);
+
+      if (
+        appointment.status === 'IN_PROGRESS' ||
+        appointment.status === 'COMPLETED' ||
+        appointment.status === 'CANCELLED' ||
+        appointment.status === 'NO_SHOW'
+      ) {
+        throw new ApiError(400, 'Only waiting appointments can be rescheduled');
       }
-      
-      const updateData = validation.data;
-      
-      // Get current appointment
-      const appointment = await prisma.appointment.findUnique({
-        where: { id },
-        select: { status: true, slotId: true },
-      });
-      
-      if (!appointment) {
-        res.status(404).json({
-          success: false,
-          error: 'Appointment not found',
-        });
-        return;
-      }
-      
-      // Build update data separately to handle timestamps properly
-      const prismaUpdateData: any = { ...updateData };
-      
-      // Handle cancellation - decrement slot count
-      if (updateData.status === 'CANCELLED' && appointment.status !== 'CANCELLED') {
-        await prisma.slot.update({
-          where: { id: appointment.slotId },
-          data: { bookedCount: { decrement: 1 } },
-        });
-        
-        // Set cancellation timestamp
-        prismaUpdateData.cancelledAt = new Date();
-      }
-      
-      // Handle check-in
-      if (updateData.status === 'CHECKED_IN' && appointment.status === 'SCHEDULED') {
-        prismaUpdateData.checkedInAt = new Date();
-      }
-      
-      // Handle start service
-      if (updateData.status === 'IN_PROGRESS' && appointment.status === 'CHECKED_IN') {
-        prismaUpdateData.startedAt = new Date();
-      }
-      
-      // Handle completion
-      if (updateData.status === 'COMPLETED' && appointment.status === 'IN_PROGRESS') {
-        prismaUpdateData.completedAt = new Date();
-      }
-      
-      const updatedAppointment = await prisma.appointment.update({
-        where: { id },
-        data: prismaUpdateData,
-        select: {
-          id: true,
-          status: true,
-          notes: true,
-          attachmentUrl: true,
-          checkedInAt: true,
-          startedAt: true,
-          completedAt: true,
-          cancelledAt: true,
-          updatedAt: true,
-          branch: {
-            select: {
-              id: true,
-              name: true,
-              code: true,
-            },
-          },
-          customer: {
-            select: {
-              id: true,
-              user: {
-                select: {
-                  firstName: true,
-                  lastName: true,
-                },
+
+      const rescheduledAppointment = await prisma.$transaction(async (tx) => {
+        const newSlot = await tx.slot.findUnique({
+          where: { id: updateData.slotId! },
+          select: {
+            id: true,
+            branchId: true,
+            serviceTypeId: true,
+            capacity: true,
+            isActive: true,
+            deletedAt: true,
+            assignments: {
+              select: {
+                staffId: true,
               },
             },
           },
-          slot: {
-            select: {
-              id: true,
-              startTime: true,
-              endTime: true,
-            },
-          },
-        },
-      });
-      
-      // Audit log: appointment status changed
-      if (updateData.status && updateData.status !== appointment.status) {
-        let auditAction: any = 'APPOINTMENT_STATUS_CHANGED';
-        
-        // Use more specific action types for key transitions
-        if (updateData.status === 'CANCELLED' && appointment.status !== 'CANCELLED') {
-          auditAction = 'APPOINTMENT_CANCELLED';
+        });
+
+        if (!newSlot) {
+          throw new ApiError(404, 'New time slot not found');
         }
-        
-        await logAudit(
-          req.user?.userId,
-          auditAction,
-          'Appointment',
-          id,
-          {
-            previousStatus: appointment.status,
-            newStatus: updateData.status,
-            branchId: updatedAppointment.branch.id,
+
+        if (!newSlot.isActive || newSlot.deletedAt) {
+          throw new ApiError(400, 'New time slot is no longer available');
+        }
+
+        if (newSlot.id === appointment.slotId) {
+          throw new ApiError(400, 'Appointment is already booked for this slot');
+        }
+
+        if (
+          (req.user?.role === 'BRANCH_MANAGER' || req.user?.role === 'STAFF') &&
+          req.user.branchId !== newSlot.branchId
+        ) {
+          throw new ApiError(403, 'Cannot reschedule outside your assigned branch');
+        }
+
+        const [activeCount, duplicate] = await Promise.all([
+          tx.appointment.count({
+            where: {
+              slotId: newSlot.id,
+              status: { in: ACTIVE_SLOT_STATUSES },
+            },
+          }),
+          tx.appointment.findFirst({
+            where: {
+              id: { not: appointment.id },
+              slotId: newSlot.id,
+              customerId: appointment.customerId,
+              status: { in: NON_CANCELLED_STATUSES },
+            },
+            select: { id: true },
+          }),
+        ]);
+
+        if (activeCount >= newSlot.capacity) {
+          throw new ApiError(400, 'New time slot is fully booked');
+        }
+
+        if (duplicate) {
+          throw new ApiError(409, 'Customer already has an appointment for the selected new slot');
+        }
+
+        const nextStaffId = await resolveBookingStaffId(tx, newSlot, updateData.staffId ?? appointment.staffId ?? undefined);
+        const updatedAppointment = await tx.appointment.update({
+          where: { id: appointment.id },
+          data: {
+            slotId: newSlot.id,
+            branchId: newSlot.branchId,
+            serviceTypeId: newSlot.serviceTypeId,
+            staffId: nextStaffId,
+            status: 'SCHEDULED',
+            checkedInAt: null,
+            startedAt: null,
+            completedAt: null,
+            cancelledAt: null,
+            cancelReason: null,
+            ...(updateData.notes !== undefined ? { notes: updateData.notes } : {}),
           },
-          getIpAddressFromRequest(req)
-        );
-      }
-      
+          select: APPOINTMENT_SELECT,
+        });
+
+        await syncSlotBookedCount(tx, appointment.slotId);
+        await syncSlotBookedCount(tx, newSlot.id);
+
+        return updatedAppointment;
+      });
+
+      await logAudit(
+        req.user?.userId,
+        'APPOINTMENT_RESCHEDULED',
+        'Appointment',
+        appointment.id,
+        {
+          branchId: rescheduledAppointment.branchId,
+          previousBranchId: appointment.branchId,
+          previousSlotId: appointment.slotId,
+          newSlotId: rescheduledAppointment.slotId,
+          previousStaffId: appointment.staffId,
+          newStaffId: rescheduledAppointment.staffId,
+        },
+        getIpAddressFromRequest(req)
+      );
+
       res.json({
         success: true,
-        data: updatedAppointment,
-        message: 'Appointment updated successfully',
+        data: serializeAppointment(rescheduledAppointment),
+        message: 'Appointment rescheduled successfully',
       });
-    } catch (error: any) {
-      console.error('Error updating appointment:', error);
-      if (error.code === 'P2025') {
-        res.status(404).json({
-          success: false,
-          error: 'Appointment not found',
-        });
-      } else {
-        res.status(500).json({
-          success: false,
-          error: 'Internal server error',
-        });
-      }
+      return;
     }
-  }
-);
 
-// DELETE /api/appointments/:id - Cancel/delete appointment
-router.delete('/:id',
-  ownershipMiddleware('appointment', 'id'),
-  async (req: Request, res: Response) => {
-    try {
-      const id = String(req.params.id);
-      
-      const appointment = await prisma.appointment.findUnique({
-        where: { id },
-        select: { status: true, slotId: true },
-      });
-      
-      if (!appointment) {
-        res.status(404).json({
-          success: false,
-          error: 'Appointment not found',
-        });
-        return;
+    if (isStatusChange) {
+      assertAppointmentStatusAccess(req, appointment);
+      assertValidStatusTransition(appointment.status, requestedStatus!);
+    } else {
+      assertAppointmentReadAccess(req, appointment);
+    }
+
+    if (req.user?.role === 'CUSTOMER' && (updateData.staffId || requestedStatus)) {
+      throw new ApiError(403, 'Customers can only update their own notes or reschedule/cancel');
+    }
+
+    const updatedAppointment = await prisma.$transaction(async (tx) => {
+      const nextData: Record<string, unknown> = {};
+
+      if (updateData.notes !== undefined) {
+        nextData.notes = updateData.notes;
       }
-      
-      // Cannot delete completed appointments
-      if (appointment.status === 'COMPLETED') {
-        res.status(400).json({
-          success: false,
-          error: 'Cannot delete completed appointments',
-        });
-        return;
+
+      if (requestedStatus) {
+        nextData.status = requestedStatus;
       }
-      
-      // If not already cancelled, decrement slot count
-      if (appointment.status !== 'CANCELLED') {
-        await prisma.slot.update({
+
+      if (updateData.cancelReason !== undefined) {
+        nextData.cancelReason = updateData.cancelReason;
+      }
+
+      if (requestedStatus === 'IN_PROGRESS') {
+        nextData.startedAt = new Date();
+      }
+
+      if (requestedStatus === 'COMPLETED') {
+        nextData.completedAt = new Date();
+      }
+
+      if (requestedStatus === 'CANCELLED') {
+        nextData.cancelledAt = new Date();
+      }
+
+      if (updateData.staffId !== undefined) {
+        if (req.user?.role === 'CUSTOMER') {
+          throw new ApiError(403, 'Customers cannot reassign staff');
+        }
+
+        const slot = await tx.slot.findUnique({
           where: { id: appointment.slotId },
-          data: { bookedCount: { decrement: 1 } },
+          select: {
+            branchId: true,
+            assignments: {
+              select: {
+                staffId: true,
+              },
+            },
+          },
+        });
+
+        if (!slot) {
+          throw new ApiError(404, 'Appointment slot not found');
+        }
+
+        nextData.staffId = await resolveBookingStaffId(tx, slot, updateData.staffId);
+      }
+
+      const savedAppointment = await tx.appointment.update({
+        where: { id: appointment.id },
+        data: nextData,
+        select: APPOINTMENT_SELECT,
+      });
+
+      if (requestedStatus === 'CANCELLED' && appointment.status !== 'CANCELLED') {
+        await syncSlotBookedCount(tx, appointment.slotId);
+      }
+
+      return savedAppointment;
+    });
+
+    if (requestedStatus && requestedStatus !== appointment.status) {
+      await logAudit(
+        req.user?.userId,
+        requestedStatus === 'CANCELLED' ? 'APPOINTMENT_CANCELLED' : 'APPOINTMENT_STATUS_CHANGED',
+        'Appointment',
+        appointment.id,
+        {
+          branchId: updatedAppointment.branchId,
+          previousStatus: publicStatus(appointment.status),
+          newStatus: publicStatus(updatedAppointment.status),
+          staffId: updatedAppointment.staffId,
+          cancelReason: updatedAppointment.cancelReason,
+        },
+        getIpAddressFromRequest(req)
+      );
+    }
+
+    res.json({
+      success: true,
+      data: serializeAppointment(updatedAppointment),
+      message: 'Appointment updated successfully',
+    });
+  } catch (error) {
+    if (error instanceof ApiError) {
+      sendError(res, error.statusCode, error.message);
+      return;
+    }
+
+    console.error('Error updating appointment:', error);
+    sendError(res, 500, 'Internal server error');
+  }
+});
+
+router.delete('/:id', async (req: Request, res: Response) => {
+  try {
+    const appointment = await getAppointmentOrThrow(String(req.params.id));
+    assertAppointmentCancellationAccess(req, appointment);
+
+    if (appointment.status === 'COMPLETED') {
+      throw new ApiError(400, 'Cannot cancel completed appointments');
+    }
+
+    const cancelledAppointment = await prisma.$transaction(async (tx) => {
+      if (appointment.status === 'CANCELLED') {
+        return tx.appointment.findUniqueOrThrow({
+          where: { id: appointment.id },
+          select: APPOINTMENT_SELECT,
         });
       }
-      
-      await prisma.appointment.delete({
-        where: { id },
+
+      const updatedAppointment = await tx.appointment.update({
+        where: { id: appointment.id },
+        data: {
+          status: 'CANCELLED',
+          cancelledAt: new Date(),
+          cancelReason: appointment.cancelReason ?? 'Cancelled by user request',
+        },
+        select: APPOINTMENT_SELECT,
       });
-      
-      // Audit log: appointment cancelled (via delete)
+
+      await syncSlotBookedCount(tx, appointment.slotId);
+
+      return updatedAppointment;
+    });
+
+    if (appointment.status !== 'CANCELLED') {
       await logAudit(
         req.user?.userId,
         'APPOINTMENT_CANCELLED',
         'Appointment',
-        id,
+        appointment.id,
         {
-          previousStatus: appointment.status,
-          slotId: appointment.slotId,
+          branchId: cancelledAppointment.branchId,
+          previousStatus: publicStatus(appointment.status),
+          newStatus: publicStatus(cancelledAppointment.status),
+          slotId: cancelledAppointment.slotId,
         },
         getIpAddressFromRequest(req)
       );
-      
-      res.json({
-        success: true,
-        message: 'Appointment cancelled successfully',
-      });
-    } catch (error: any) {
-      console.error('Error deleting appointment:', error);
-      if (error.code === 'P2025') {
-        res.status(404).json({
-          success: false,
-          error: 'Appointment not found',
-        });
-      } else {
-        res.status(500).json({
-          success: false,
-          error: 'Internal server error',
-        });
-      }
     }
+
+    res.json({
+      success: true,
+      data: serializeAppointment(cancelledAppointment),
+      message: 'Appointment cancelled successfully',
+    });
+  } catch (error) {
+    if (error instanceof ApiError) {
+      sendError(res, error.statusCode, error.message);
+      return;
+    }
+
+    console.error('Error cancelling appointment:', error);
+    sendError(res, 500, 'Internal server error');
   }
-);
+});
 
 export default router;
