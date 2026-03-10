@@ -10,7 +10,6 @@ export const registerSchema = z.object({
   firstName: z.string().min(1),
   lastName: z.string().min(1),
   phone: z.string().optional(),
-  role: z.enum(['ADMIN', 'BRANCH_MANAGER', 'STAFF', 'CUSTOMER']).optional(),
 });
 
 export const loginSchema = z.object({
@@ -185,12 +184,13 @@ export interface ApiResponse<T = unknown> {
   message?: string;
 }
 
-export interface JwtPayload {
+export interface AuthenticatedUser {
   customerId?: string;
   branchId?: string;
+  staffId?: string;
   userId: string;
   email: string;
-  role: string;
+  role: 'ADMIN' | 'BRANCH_MANAGER' | 'STAFF' | 'CUSTOMER';
 }
 
 export interface PaginatedResponse<T> {

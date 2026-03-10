@@ -135,7 +135,7 @@ router.post('/', authMiddleware, roleMiddleware('ADMIN'), async (req: Request, r
 // GET /api/branches/:id - Get branch details
 router.get('/:id', authMiddleware, async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = String(req.params.id);
     
     // Check branch access
     if (req.user?.role === 'BRANCH_MANAGER' || req.user?.role === 'STAFF') {
@@ -223,7 +223,7 @@ router.patch('/:id', authMiddleware,
   branchScopedMiddleware(true),
   async (req: Request, res: Response) => {
     try {
-      const { id } = req.params;
+      const id = String(req.params.id);
       const validation = updateBranchSchema.safeParse(req.body);
       
       if (!validation.success) {
@@ -286,7 +286,7 @@ router.patch('/:id', authMiddleware,
 // DELETE /api/branches/:id - Delete branch (ADMIN only)
 router.delete('/:id', authMiddleware, roleMiddleware('ADMIN'), async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = String(req.params.id);
     
     await prisma.branch.delete({
       where: { id },

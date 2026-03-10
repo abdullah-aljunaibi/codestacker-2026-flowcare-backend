@@ -1,92 +1,139 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
+import bcrypt from 'bcrypt';
 import { PrismaClient } from '@prisma/client';
-import { JwtPayload } from '../types/index.js';
+import { AuthenticatedUser } from '../types/index.js';
 
 declare global {
   namespace Express {
     interface Request {
-      user?: JwtPayload & {
-        branchId?: string;
-        staffId?: string;
-        customerId?: string;
-      };
+      user?: AuthenticatedUser;
     }
   }
 }
 
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-change-me';
 const prisma = new PrismaClient();
 
-/**
- * Authentication middleware - validates JWT token and enriches request with user context
- */
+function parseBasicAuthHeader(authorization?: string): { email: string; password: string } | null {
+  if (!authorization || !authorization.startsWith('Basic ')) {
+    return null;
+  }
+
+  const encodedCredentials = authorization.slice(6).trim();
+  if (!encodedCredentials) {
+    return null;
+  }
+
+  try {
+    const decodedCredentials = Buffer.from(encodedCredentials, 'base64').toString('utf8');
+    const separatorIndex = decodedCredentials.indexOf(':');
+
+    if (separatorIndex <= 0) {
+      return null;
+    }
+
+    const email = decodedCredentials.slice(0, separatorIndex).trim();
+    const password = decodedCredentials.slice(separatorIndex + 1);
+
+    if (!email || !password) {
+      return null;
+    }
+
+    return { email, password };
+  } catch {
+    return null;
+  }
+}
+
+async function authenticateRequest(req: Request): Promise<AuthenticatedUser | null> {
+  const credentials = parseBasicAuthHeader(req.headers.authorization);
+  if (!credentials) {
+    return null;
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { email: credentials.email },
+    include: {
+      staffProfile: {
+        select: {
+          id: true,
+          branchId: true,
+        },
+      },
+      customerProfile: {
+        select: {
+          id: true,
+        },
+      },
+    },
+  });
+
+  if (!user) {
+    return null;
+  }
+
+  const isValidPassword = await bcrypt.compare(credentials.password, user.password);
+  if (!isValidPassword) {
+    return null;
+  }
+
+  const authenticatedUser: AuthenticatedUser = {
+    userId: user.id,
+    email: user.email,
+    role: user.role,
+  };
+
+  if (user.role === 'BRANCH_MANAGER' || user.role === 'STAFF') {
+    if (!user.staffProfile) {
+      return null;
+    }
+
+    authenticatedUser.branchId = user.staffProfile.branchId;
+    authenticatedUser.staffId = user.staffProfile.id;
+  }
+
+  if (user.role === 'CUSTOMER') {
+    if (!user.customerProfile) {
+      return null;
+    }
+
+    authenticatedUser.customerId = user.customerProfile.id;
+  }
+
+  return authenticatedUser;
+}
+
 export function authMiddleware(
   req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> {
   return (async () => {
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      res.status(401).json({
-        success: false,
-        error: 'No token provided',
-      });
-      return;
-    }
-
-    const token = authHeader.substring(7);
-
     try {
-      const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
-      req.user = decoded;
+      const authenticatedUser = await authenticateRequest(req);
 
-      // Enrich with profile-specific IDs
-      if (decoded.role === 'ADMIN') {
-        // Admin has no branch/staff/customer restrictions
-        next();
+      if (!authenticatedUser) {
+        res.setHeader('WWW-Authenticate', 'Basic realm="FlowCare"');
+        res.status(401).json({
+          success: false,
+          error: 'Invalid or missing Basic Authentication credentials',
+        });
         return;
       }
 
-      // Load profile to get branchId for BRANCH_MANAGER/STAFF or customerId for CUSTOMER
-      if (decoded.role === 'BRANCH_MANAGER' || decoded.role === 'STAFF') {
-        const staff = await prisma.staff.findUnique({
-          where: { userId: decoded.userId },
-          select: { id: true, branchId: true, isManager: true },
-        });
-        if (staff) {
-          req.user.branchId = staff.branchId;
-          req.user.staffId = staff.id;
-        }
-      } else if (decoded.role === 'CUSTOMER') {
-        const customer = await prisma.customer.findUnique({
-          where: { userId: decoded.userId },
-          select: { id: true },
-        });
-        if (customer) {
-          req.user.customerId = customer.id;
-        }
-      }
-
+      req.user = authenticatedUser;
       next();
     } catch (error) {
       res.status(401).json({
         success: false,
-        error: 'Invalid token',
+        error: 'Authentication failed',
       });
-      return;
     }
   })();
 }
 
-/**
- * Role-based access control middleware
- * @param allowedRoles - List of roles permitted to access this route
- */
 export function roleMiddleware(...allowedRoles: (string | string[])[]) {
   const flatRoles = allowedRoles.flat();
+
   return (req: Request, res: Response, next: NextFunction): void => {
     if (!req.user) {
       res.status(401).json({
@@ -108,13 +155,6 @@ export function roleMiddleware(...allowedRoles: (string | string[])[]) {
   };
 }
 
-/**
- * Branch-scoped access control middleware
- * Ensures user can only access resources within their branch (for BRANCH_MANAGER/STAFF)
- * ADMIN can access all branches
- * 
- * @param allowAdmin - Whether ADMIN role should be allowed (default: true)
- */
 export function branchScopedMiddleware(allowAdmin: boolean = true) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     if (!req.user) {
@@ -125,21 +165,19 @@ export function branchScopedMiddleware(allowAdmin: boolean = true) {
       return;
     }
 
-    // ADMIN can access all branches
     if (req.user.role === 'ADMIN') {
       if (allowAdmin) {
         next();
         return;
-      } else {
-        res.status(403).json({
-          success: false,
-          error: 'Admin access not permitted for this operation',
-        });
-        return;
       }
+
+      res.status(403).json({
+        success: false,
+        error: 'Admin access not permitted for this operation',
+      });
+      return;
     }
 
-    // BRANCH_MANAGER and STAFF can only access their own branch
     if (req.user.role === 'BRANCH_MANAGER' || req.user.role === 'STAFF') {
       if (!req.user.branchId) {
         res.status(403).json({
@@ -149,9 +187,8 @@ export function branchScopedMiddleware(allowAdmin: boolean = true) {
         return;
       }
 
-      // Check if the requested resource belongs to user's branch
       const requestedBranchId = req.params.branchId || req.body.branchId;
-      
+
       if (requestedBranchId && requestedBranchId !== req.user.branchId) {
         res.status(403).json({
           success: false,
@@ -160,7 +197,6 @@ export function branchScopedMiddleware(allowAdmin: boolean = true) {
         return;
       }
 
-      // Inject branchId into params/body if not provided (for list operations)
       if (!requestedBranchId) {
         req.query = req.query || {};
         (req.query as any).branchId = req.user.branchId;
@@ -170,7 +206,6 @@ export function branchScopedMiddleware(allowAdmin: boolean = true) {
       return;
     }
 
-    // CUSTOMER cannot access branch-scoped admin/staff routes
     res.status(403).json({
       success: false,
       error: 'Insufficient permissions for branch operations',
@@ -178,13 +213,6 @@ export function branchScopedMiddleware(allowAdmin: boolean = true) {
   };
 }
 
-/**
- * Resource ownership middleware
- * Ensures user can only access/modify their own resources
- * 
- * @param resourceType - Type of resource ('appointment', 'customer', etc.)
- * @param idParam - Parameter name containing resource ID (default: 'id')
- */
 export function ownershipMiddleware(resourceType: string, idParam: string = 'id') {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     if (!req.user) {
@@ -195,14 +223,13 @@ export function ownershipMiddleware(resourceType: string, idParam: string = 'id'
       return;
     }
 
-    // ADMIN can access all resources
     if (req.user.role === 'ADMIN') {
       next();
       return;
     }
 
     const resourceId = req.params[idParam] || req.body[idParam];
-    
+
     if (!resourceId) {
       res.status(400).json({
         success: false,
@@ -212,11 +239,10 @@ export function ownershipMiddleware(resourceType: string, idParam: string = 'id'
     }
 
     try {
-      // Check ownership based on resource type
       if (resourceType === 'appointment') {
         const appointment = await prisma.appointment.findUnique({
           where: { id: resourceId },
-          select: { customerId: true },
+          select: { customerId: true, branchId: true },
         });
 
         if (!appointment) {
@@ -227,7 +253,6 @@ export function ownershipMiddleware(resourceType: string, idParam: string = 'id'
           return;
         }
 
-        // CUSTOMER can only access their own appointments
         if (req.user.role === 'CUSTOMER') {
           if (!req.user.customerId || appointment.customerId !== req.user.customerId) {
             res.status(403).json({
@@ -238,13 +263,8 @@ export function ownershipMiddleware(resourceType: string, idParam: string = 'id'
           }
         }
 
-        // BRANCH_MANAGER/STAFF can access appointments at their branch
         if (req.user.role === 'BRANCH_MANAGER' || req.user.role === 'STAFF') {
-          const apptWithBranch = await prisma.appointment.findUnique({
-            where: { id: resourceId },
-            select: { branchId: true },
-          });
-          if (apptWithBranch && apptWithBranch.branchId !== req.user.branchId) {
+          if (appointment.branchId !== req.user.branchId) {
             res.status(403).json({
               success: false,
               error: 'Access denied: Cannot access appointments outside your branch',
@@ -265,49 +285,24 @@ export function ownershipMiddleware(resourceType: string, idParam: string = 'id'
   };
 }
 
-/**
- * Optional auth middleware - doesn't fail if no token, but enriches request if valid
- */
 export function optionalAuthMiddleware(
   req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> {
   return (async () => {
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    if (!parseBasicAuthHeader(req.headers.authorization)) {
       next();
       return;
     }
 
-    const token = authHeader.substring(7);
-
     try {
-      const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
-      req.user = decoded;
-
-      // Enrich with profile-specific IDs
-      if (decoded.role === 'BRANCH_MANAGER' || decoded.role === 'STAFF') {
-        const staff = await prisma.staff.findUnique({
-          where: { userId: decoded.userId },
-          select: { id: true, branchId: true },
-        });
-        if (staff) {
-          req.user.branchId = staff.branchId;
-          req.user.staffId = staff.id;
-        }
-      } else if (decoded.role === 'CUSTOMER') {
-        const customer = await prisma.customer.findUnique({
-          where: { userId: decoded.userId },
-          select: { id: true },
-        });
-        if (customer) {
-          req.user.customerId = customer.id;
-        }
+      const authenticatedUser = await authenticateRequest(req);
+      if (authenticatedUser) {
+        req.user = authenticatedUser;
       }
-    } catch (error) {
-      // Invalid token, but we continue without auth
+    } catch {
+      // Ignore invalid credentials for public endpoints.
     }
 
     next();

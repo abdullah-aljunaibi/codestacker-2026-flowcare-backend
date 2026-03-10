@@ -25,7 +25,7 @@ router.get('/customer-id/:customerId',
   roleMiddleware(['ADMIN']),
   async (req: Request, res: Response) => {
     try {
-      const { customerId } = req.params;
+      const customerId = String(req.params.customerId);
       
       // Verify customer exists and has an ID image
       const customer = await prisma.customer.findUnique({
@@ -105,7 +105,7 @@ router.get('/appointment/:appointmentId/attachment',
   roleMiddleware(['ADMIN', 'BRANCH_MANAGER', 'STAFF', 'CUSTOMER']),
   async (req: Request, res: Response) => {
     try {
-      const { appointmentId } = req.params;
+      const appointmentId = String(req.params.appointmentId);
       
       // Verify appointment exists and has an attachment
       const appointment = await prisma.appointment.findUnique({

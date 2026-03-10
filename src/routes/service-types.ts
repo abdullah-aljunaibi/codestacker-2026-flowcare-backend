@@ -162,7 +162,7 @@ router.post('/', authMiddleware,
 // GET /api/service-types/:id - Get service type details
 router.get('/:id', authMiddleware, async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = String(req.params.id);
     
     const serviceType = await prisma.serviceType.findUnique({
       where: { id },
@@ -242,7 +242,7 @@ router.patch('/:id', authMiddleware,
   branchScopedMiddleware(true),
   async (req: Request, res: Response) => {
     try {
-      const { id } = req.params;
+      const id = String(req.params.id);
       const validation = updateServiceTypeSchema.safeParse(req.body);
       
       if (!validation.success) {
@@ -345,7 +345,7 @@ router.delete('/:id', authMiddleware,
   branchScopedMiddleware(true),
   async (req: Request, res: Response) => {
     try {
-      const { id } = req.params;
+      const id = String(req.params.id);
       
       const existingServiceType = await prisma.serviceType.findUnique({
         where: { id },

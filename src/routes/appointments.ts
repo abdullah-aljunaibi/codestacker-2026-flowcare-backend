@@ -332,7 +332,7 @@ router.get('/:id',
   ownershipMiddleware('appointment', 'id'),
   async (req: Request, res: Response) => {
     try {
-      const { id } = req.params;
+      const id = String(req.params.id);
       
       const appointment = await prisma.appointment.findUnique({
         where: { id },
@@ -429,7 +429,7 @@ router.patch('/:id',
   ownershipMiddleware('appointment', 'id'),
   async (req: Request, res: Response) => {
     try {
-      const { id } = req.params;
+      const id = String(req.params.id);
       const validation = updateAppointmentSchema.safeParse(req.body);
       
       if (!validation.success) {
@@ -577,7 +577,7 @@ router.delete('/:id',
   ownershipMiddleware('appointment', 'id'),
   async (req: Request, res: Response) => {
     try {
-      const { id } = req.params;
+      const id = String(req.params.id);
       
       const appointment = await prisma.appointment.findUnique({
         where: { id },

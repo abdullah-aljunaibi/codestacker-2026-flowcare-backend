@@ -218,7 +218,7 @@ router.get('/:id',
   roleMiddleware('ADMIN', 'BRANCH_MANAGER', 'STAFF'),
   async (req: Request, res: Response) => {
     try {
-      const { id } = req.params;
+      const id = String(req.params.id);
       
       const staff = await prisma.staff.findUnique({
         where: { id },
@@ -328,7 +328,7 @@ router.patch('/:id',
   branchScopedMiddleware(true),
   async (req: Request, res: Response) => {
     try {
-      const { id } = req.params;
+      const id = String(req.params.id);
       const validation = updateStaffSchema.safeParse(req.body);
       
       if (!validation.success) {
@@ -448,7 +448,7 @@ router.delete('/:id',
   branchScopedMiddleware(true),
   async (req: Request, res: Response) => {
     try {
-      const { id } = req.params;
+      const id = String(req.params.id);
       
       const existingStaff = await prisma.staff.findUnique({
         where: { id },

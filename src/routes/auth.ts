@@ -1,8 +1,8 @@
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcrypt';
 import { PrismaClient } from '@prisma/client';
-import { registerSchema, loginSchema } from '../types/index.js';
-import { generateToken } from '../utils/jwt.js';
+import { authMiddleware } from '../middleware/auth.js';
+import { registerSchema } from '../types/index.js';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -21,7 +21,7 @@ router.post('/register', async (req: Request, res: Response) => {
       return;
     }
 
-    const { email, password, firstName, lastName, role } = validation.data;
+    const { email, password, firstName, lastName, phone } = validation.data;
 
     // Check if user exists
     const existingUser = await prisma.user.findUnique({
@@ -46,7 +46,8 @@ router.post('/register', async (req: Request, res: Response) => {
         password: hashedPassword,
         firstName,
         lastName,
-        role: role || 'CUSTOMER',
+        phone,
+        role: 'CUSTOMER',
       },
       select: {
         id: true,
@@ -59,32 +60,24 @@ router.post('/register', async (req: Request, res: Response) => {
     });
 
     // If registering as CUSTOMER, create customer profile
-    let customerId: string | undefined;
-    if (user.role === 'CUSTOMER') {
-      const customer = await prisma.customer.create({
-        data: {
-          userId: user.id,
-          idNumber: `ID${Date.now()}`,
-          dateOfBirth: new Date('2000-01-01'),
-        },
-      });
-      customerId = customer.id;
-    }
-
-    // Generate token
-    const token = generateToken({
-      userId: user.id,
-      email: user.email,
-      role: user.role,
-      ...(customerId && { customerId }),
+    const customer = await prisma.customer.create({
+      data: {
+        userId: user.id,
+        idNumber: `ID${Date.now()}`,
+        dateOfBirth: new Date('2000-01-01'),
+      },
     });
 
     res.status(201).json({
       success: true,
       data: {
         user,
-        token,
+        customer: {
+          id: customer.id,
+          userId: customer.userId,
+        },
       },
+      message: 'Registration successful. Use Basic Auth with your email and password on protected routes.',
     });
   } catch (error) {
     console.error('Registration error:', error);
@@ -95,91 +88,22 @@ router.post('/register', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/auth/login
-router.post('/login', async (req: Request, res: Response) => {
-  try {
-    const validation = loginSchema.safeParse(req.body);
-    
-    if (!validation.success) {
-      res.status(400).json({
-        success: false,
-        error: 'Validation failed',
-        details: validation.error.errors,
-      });
-      return;
-    }
-
-    const { email, password } = validation.data;
-
-    // Find user
-    const user = await prisma.user.findUnique({
-      where: { email },
-    });
-
-    if (!user) {
-      res.status(401).json({
-        success: false,
-        error: 'Invalid credentials',
-      });
-      return;
-    }
-
-    // Verify password
-    const isValid = await bcrypt.compare(password, user.password);
-
-    if (!isValid) {
-      res.status(401).json({
-        success: false,
-        error: 'Invalid credentials',
-      });
-      return;
-    }
-
-    // Look up customerId or branchId based on role
-    let customerId: string | undefined;
-    let branchId: string | undefined;
-
-    if (user.role === 'CUSTOMER') {
-      const customer = await prisma.customer.findFirst({
-        where: { userId: user.id },
-      });
-      customerId = customer?.id;
-    } else if (user.role === 'STAFF' || user.role === 'BRANCH_MANAGER') {
-      const staff = await prisma.staff.findFirst({
-        where: { userId: user.id },
-      });
-      branchId = staff?.branchId;
-    }
-
-    // Generate token
-    const token = generateToken({
-      userId: user.id,
-      email: user.email,
-      role: user.role,
-      ...(customerId && { customerId }),
-      ...(branchId && { branchId }),
-    });
-
-    res.json({
-      success: true,
-      data: {
-        user: {
-          id: user.id,
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          role: user.role,
-        },
-        token,
+// POST /api/auth/login - Basic Auth credential validation endpoint
+router.post('/login', authMiddleware, async (req: Request, res: Response) => {
+  res.json({
+    success: true,
+    data: {
+      user: {
+        id: req.user?.userId,
+        email: req.user?.email,
+        role: req.user?.role,
+        branchId: req.user?.branchId,
+        customerId: req.user?.customerId,
+        staffId: req.user?.staffId,
       },
-    });
-  } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Internal server error',
-    });
-  }
+    },
+    message: 'Credentials are valid. Use the same Basic Auth header on protected routes.',
+  });
 });
 
 export default router;

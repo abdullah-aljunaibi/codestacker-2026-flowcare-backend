@@ -556,7 +556,7 @@ router.patch('/:id', authMiddleware,
   branchScopedMiddleware(true),
   async (req: Request, res: Response) => {
     try {
-      const { id } = req.params;
+      const id = String(req.params.id);
       const validation = updateSlotSchema.safeParse(req.body);
       
       if (!validation.success) {
@@ -713,7 +713,7 @@ router.delete('/:id', authMiddleware,
   branchScopedMiddleware(true),
   async (req: Request, res: Response) => {
     try {
-      const { id } = req.params;
+      const id = String(req.params.id);
       
       const existingSlot = await prisma.slot.findUnique({
         where: { id },
@@ -818,7 +818,7 @@ router.post('/:id/restore', authMiddleware,
   roleMiddleware('ADMIN'),
   async (req: Request, res: Response) => {
     try {
-      const { id } = req.params;
+      const id = String(req.params.id);
       
       const existingSlot = await prisma.slot.findUnique({
         where: { id },

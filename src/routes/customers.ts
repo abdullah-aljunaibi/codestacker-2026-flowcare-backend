@@ -205,7 +205,7 @@ router.post('/',
 // GET /api/customers/:id - Get customer details
 router.get('/:id', async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = String(req.params.id);
     
     const customer = await prisma.customer.findUnique({
       where: { id },
@@ -330,7 +330,7 @@ router.get('/:id', async (req: Request, res: Response) => {
 router.patch('/:id',
   async (req: Request, res: Response) => {
     try {
-      const { id } = req.params;
+      const id = String(req.params.id);
       const validation = updateCustomerSchema.safeParse(req.body);
       
       if (!validation.success) {
