@@ -8,7 +8,7 @@ Protected routes use HTTP Basic Authentication:
 curl -u admin@flowcare.com:admin123 http://localhost:3000/api/audit
 ```
 
-Appointment statuses exposed by the API are `WAITING`, `SERVING`, `DONE`, `CANCELLED`, and `NO_SHOW`.
+Appointment statuses exposed by the API are `scheduled`, `checked-in`, `in-progress`, `completed`, `cancelled`, and `no-show`. Legacy aliases such as `WAITING`, `SERVING`, and `DONE` are still accepted on input, but serializer output always uses the canonical values.
 
 ## Response Conventions
 
@@ -69,7 +69,7 @@ curl -X POST http://localhost:3000/api/auth/register \
 | `GET` | `/api/appointments` | Any authenticated user | Customers see own, staff see assigned-to-me only, managers see assigned branch, admin sees all |
 | `POST` | `/api/appointments` | Customer, Staff, Branch Manager, Admin | Primary booking contract. Accepts `multipart/form-data`, reads text fields from `req.body`, and accepts optional `attachment` in `req.file` |
 | `GET` | `/api/appointments/:id` | Any authenticated user with access | Customers own only; staff assigned-only; managers branch scoped |
-| `PATCH` | `/api/appointments/:id` | Any authenticated user with access | Reschedule with `slotId`, update notes, or update status |
+| `PATCH` | `/api/appointments/:id` | Any authenticated user with access | Reschedule with `slotId`, update notes, or update status using canonical values |
 | `DELETE` | `/api/appointments/:id` | Any authenticated user with access | Cancel appointment record |
 
 Book with no attachment:
@@ -115,7 +115,7 @@ Update workflow status:
 curl -X PATCH http://localhost:3000/api/appointments/APPOINTMENT_ID \
   -u staff1.mct-001@flowcare.com:password123 \
   -H "Content-Type: application/json" \
-  -d '{"status":"DONE"}'
+  -d '{"status":"completed"}'
 ```
 
 ## Branches
@@ -154,7 +154,8 @@ curl -X POST http://localhost:3000/api/branches \
 | `GET` | `/api/slots` | Public | Filters: `branchId`, `serviceTypeId`, `startDate`, `endDate`, `available`; always excludes soft-deleted rows and ignores `includeDeleted` |
 | `GET` | `/api/slots/branch-view` | Admin, Branch Manager, Staff | Internal listing; managers/staff are branch-scoped; soft-deleted rows stay hidden |
 | `GET` | `/api/slots/admin-view` | Admin | Admin-only listing; `includeDeleted=true` includes soft-deleted rows |
-| `POST` | `/api/slots` | Admin, Branch Manager | Create slot |
+| `POST` | `/api/slots` | Admin, Branch Manager | Create one slot from an object payload, or create multiple slots from an array payload |
+| `POST` | `/api/slots/bulk` | Admin, Branch Manager | Create multiple slots from an array payload |
 | `POST` | `/api/slots/cleanup-retention` | Admin | Hard-deletes only soft-deleted slots older than each branch's DB-backed retention window; idempotent on rerun |
 | `GET` | `/api/slots/retention-preview` | Admin | Preview retention cleanup |
 | `POST` | `/api/slots/:id/assign-staff` | Admin, Branch Manager | Explicitly assign a staff member to a slot; managers limited to own branch; staff must belong to the slot branch; duplicate assignment is idempotent |
@@ -163,6 +164,39 @@ curl -X POST http://localhost:3000/api/branches \
 | `DELETE` | `/api/slots/:id` | Admin, Branch Manager | Soft-delete slot |
 | `DELETE` | `/api/slots/:id/assign-staff/:staffId` | Admin, Branch Manager | Explicitly remove a staff assignment from a slot; managers limited to own branch |
 | `POST` | `/api/slots/:id/restore` | Admin | Restore soft-deleted slot |
+
+Slot semantics:
+
+- Each slot is one bookable unit.
+- A second active booking on the same slot is rejected even if stored legacy data still has `capacity > 1`.
+- Slot create and update requests only accept `capacity: 1`.
+
+Create one slot:
+
+```bash
+curl -X POST http://localhost:3000/api/slots \
+  -u admin@flowcare.com:admin123 \
+  -H "Content-Type: application/json" \
+  -d '{"branchId":"BRANCH_ID","serviceTypeId":"SERVICE_TYPE_ID","startTime":"2026-03-10T09:00:00.000Z","endTime":"2026-03-10T09:15:00.000Z","capacity":1}'
+```
+
+Create multiple slots with `POST /api/slots/bulk`:
+
+```bash
+curl -X POST http://localhost:3000/api/slots/bulk \
+  -u admin@flowcare.com:admin123 \
+  -H "Content-Type: application/json" \
+  -d '[{"branchId":"BRANCH_ID","serviceTypeId":"SERVICE_TYPE_ID","startTime":"2026-03-10T09:00:00.000Z","endTime":"2026-03-10T09:15:00.000Z","capacity":1},{"branchId":"BRANCH_ID","serviceTypeId":"SERVICE_TYPE_ID","startTime":"2026-03-10T09:15:00.000Z","endTime":"2026-03-10T09:30:00.000Z","capacity":1}]'
+```
+
+Create multiple slots with an array payload on `POST /api/slots`:
+
+```bash
+curl -X POST http://localhost:3000/api/slots \
+  -u admin@flowcare.com:admin123 \
+  -H "Content-Type: application/json" \
+  -d '[{"branchId":"BRANCH_ID","serviceTypeId":"SERVICE_TYPE_ID","startTime":"2026-03-10T09:00:00.000Z","endTime":"2026-03-10T09:15:00.000Z","capacity":1},{"branchId":"BRANCH_ID","serviceTypeId":"SERVICE_TYPE_ID","startTime":"2026-03-10T09:15:00.000Z","endTime":"2026-03-10T09:30:00.000Z","capacity":1}]'
+```
 
 Cleanup example:
 

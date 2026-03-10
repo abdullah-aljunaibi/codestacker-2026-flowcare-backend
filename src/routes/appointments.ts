@@ -10,6 +10,7 @@ import { getIpAddressFromRequest, logAudit } from '../utils/audit-logger.js';
 
 const router = Router();
 const prisma = new PrismaClient();
+const SLOT_BOOKING_LIMIT = 1;
 const PRIVATE_APPOINTMENT_ATTACHMENT_DIR = path.join(process.cwd(), 'storage', 'private', 'appointment-attachments');
 const APPOINTMENT_ATTACHMENT_MAX_SIZE = 5 * 1024 * 1024;
 const APPOINTMENT_ATTACHMENT_MIME_TO_EXTENSIONS: Record<string, string[]> = {
@@ -149,6 +150,18 @@ function normalizeStatusInput(status?: string): AppointmentStatus | undefined {
   }
 
   switch (status) {
+    case 'scheduled':
+      return 'SCHEDULED';
+    case 'checked-in':
+      return 'CHECKED_IN';
+    case 'in-progress':
+      return 'IN_PROGRESS';
+    case 'completed':
+      return 'COMPLETED';
+    case 'cancelled':
+      return 'CANCELLED';
+    case 'no-show':
+      return 'NO_SHOW';
     case 'WAITING':
       return 'SCHEDULED';
     case 'SERVING':
@@ -167,19 +180,22 @@ function normalizeStatusInput(status?: string): AppointmentStatus | undefined {
   }
 }
 
-function publicStatus(status: AppointmentStatus): 'WAITING' | 'SERVING' | 'DONE' | 'CANCELLED' | 'NO_SHOW' {
+function publicStatus(
+  status: AppointmentStatus
+): 'scheduled' | 'checked-in' | 'in-progress' | 'completed' | 'cancelled' | 'no-show' {
   switch (status) {
     case 'SCHEDULED':
+      return 'scheduled';
     case 'CHECKED_IN':
-      return 'WAITING';
+      return 'checked-in';
     case 'IN_PROGRESS':
-      return 'SERVING';
+      return 'in-progress';
     case 'COMPLETED':
-      return 'DONE';
+      return 'completed';
     case 'CANCELLED':
-      return 'CANCELLED';
+      return 'cancelled';
     case 'NO_SHOW':
-      return 'NO_SHOW';
+      return 'no-show';
   }
 }
 
@@ -296,18 +312,17 @@ function assertValidStatusTransition(currentStatus: AppointmentStatus, nextStatu
     return;
   }
 
-  const current = publicStatus(currentStatus);
-  const next = publicStatus(nextStatus);
-  const validTransitions = new Map<string, string[]>([
-    ['WAITING', ['SERVING', 'CANCELLED']],
-    ['SERVING', ['DONE', 'CANCELLED']],
-    ['DONE', []],
+  const validTransitions = new Map<AppointmentStatus, AppointmentStatus[]>([
+    ['SCHEDULED', ['CHECKED_IN', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'NO_SHOW']],
+    ['CHECKED_IN', ['IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'NO_SHOW']],
+    ['IN_PROGRESS', ['COMPLETED', 'CANCELLED']],
+    ['COMPLETED', []],
     ['CANCELLED', []],
     ['NO_SHOW', []],
   ]);
 
-  if (!validTransitions.get(current)?.includes(next)) {
-    throw new ApiError(400, `Invalid appointment status transition: ${current} -> ${next}`);
+  if (!validTransitions.get(currentStatus)?.includes(nextStatus)) {
+    throw new ApiError(400, `Invalid appointment status transition: ${publicStatus(currentStatus)} -> ${publicStatus(nextStatus)}`);
   }
 }
 
@@ -514,8 +529,8 @@ router.post('/', async (req: Request, res: Response) => {
         }),
       ]);
 
-      if (activeCount >= slot.capacity) {
-        throw new ApiError(400, 'Time slot is fully booked');
+      if (activeCount >= SLOT_BOOKING_LIMIT) {
+        throw new ApiError(409, 'Time slot already has a booking');
       }
 
       if (duplicate) {
@@ -696,8 +711,8 @@ router.patch('/:id', async (req: Request, res: Response) => {
           }),
         ]);
 
-        if (activeCount >= newSlot.capacity) {
-          throw new ApiError(400, 'New time slot is fully booked');
+        if (activeCount >= SLOT_BOOKING_LIMIT) {
+          throw new ApiError(409, 'New time slot already has a booking');
         }
 
         if (duplicate) {
@@ -781,6 +796,10 @@ router.patch('/:id', async (req: Request, res: Response) => {
 
       if (requestedStatus === 'IN_PROGRESS') {
         nextData.startedAt = new Date();
+      }
+
+      if (requestedStatus === 'CHECKED_IN') {
+        nextData.checkedInAt = new Date();
       }
 
       if (requestedStatus === 'COMPLETED') {

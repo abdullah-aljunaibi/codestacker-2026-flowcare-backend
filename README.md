@@ -156,7 +156,7 @@ Update workflow status as assigned staff:
 curl -X PATCH http://localhost:3000/api/appointments/APPOINTMENT_ID \
   -u staff1.mct-001@flowcare.com:password123 \
   -H "Content-Type: application/json" \
-  -d '{"status":"SERVING"}'
+  -d '{"status":"checked-in"}'
 ```
 
 Appointment visibility rules:
@@ -165,6 +165,30 @@ Appointment visibility rules:
 - Branch Manager sees appointments in their assigned branch
 - Staff sees only appointments where `appointment.staffId === req.user.staffId`
 - Customer sees only their own appointments
+
+Appointment status output uses canonical values: `scheduled`, `checked-in`, `in-progress`, `completed`, `cancelled`, and `no-show`. Legacy aliases such as `WAITING`, `SERVING`, and `DONE` are still accepted on input only.
+
+Slot booking semantics are one slot, one booking. A second active appointment on the same slot is rejected even if legacy rows in the database still have `capacity > 1`.
+
+Create one slot:
+
+```bash
+curl -X POST http://localhost:3000/api/slots \
+  -u admin@flowcare.com:admin123 \
+  -H "Content-Type: application/json" \
+  -d '{"branchId":"BRANCH_ID","serviceTypeId":"SERVICE_TYPE_ID","startTime":"2026-03-10T09:00:00.000Z","endTime":"2026-03-10T09:15:00.000Z","capacity":1}'
+```
+
+Bulk create slots:
+
+```bash
+curl -X POST http://localhost:3000/api/slots/bulk \
+  -u admin@flowcare.com:admin123 \
+  -H "Content-Type: application/json" \
+  -d '[{"branchId":"BRANCH_ID","serviceTypeId":"SERVICE_TYPE_ID","startTime":"2026-03-10T09:00:00.000Z","endTime":"2026-03-10T09:15:00.000Z","capacity":1},{"branchId":"BRANCH_ID","serviceTypeId":"SERVICE_TYPE_ID","startTime":"2026-03-10T09:15:00.000Z","endTime":"2026-03-10T09:30:00.000Z","capacity":1}]'
+```
+
+`POST /api/slots` also accepts the same array payload as `POST /api/slots/bulk`.
 
 Upload or replace an attachment on an existing appointment with the legacy helper route:
 

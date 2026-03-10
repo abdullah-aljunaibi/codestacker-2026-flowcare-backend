@@ -1,12 +1,13 @@
 import { Router, Request, Response } from 'express';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { authMiddleware, roleMiddleware, branchScopedMiddleware } from '../middleware/auth.js';
-import { assignStaffToSlotSchema, createSlotSchema, updateSlotSchema } from '../types/index.js';
+import { assignStaffToSlotSchema, createSlotBulkSchema, createSlotSchema, updateSlotSchema } from '../types/index.js';
 import { createAuditLog, logAudit, getIpAddressFromRequest } from '../utils/audit-logger.js';
 import { getEffectiveRetentionConfigs } from '../utils/retention-config.js';
 
 const router = Router();
 const prisma = new PrismaClient();
+const SLOT_BOOKING_LIMIT = 1;
 
 const slotListSelect = {
   id: true,
@@ -82,11 +83,142 @@ function buildSlotListWhereClause(
   }
 
   if (available === 'true' || options.forceAvailable) {
-    whereClause.bookedCount = { lt: prisma.slot.fields.capacity };
+    whereClause.bookedCount = { lt: SLOT_BOOKING_LIMIT };
     whereClause.isActive = true;
   }
 
   return whereClause;
+}
+
+type SlotCreatePayload = {
+  branchId: string;
+  serviceTypeId: string;
+  startTime: string;
+  endTime: string;
+  capacity?: 1;
+};
+
+async function validateSlotCreatePayload(req: Request, data: SlotCreatePayload) {
+  if (req.user?.role === 'BRANCH_MANAGER' && req.user?.branchId !== data.branchId) {
+    return {
+      ok: false as const,
+      status: 403,
+      error: 'Access denied: Can only create slots in your assigned branch',
+    };
+  }
+
+  const serviceType = await prisma.serviceType.findUnique({
+    where: { id: data.serviceTypeId },
+    select: { id: true, branchId: true },
+  });
+
+  if (!serviceType) {
+    return {
+      ok: false as const,
+      status: 400,
+      error: 'Service type not found',
+    };
+  }
+
+  if (serviceType.branchId !== data.branchId) {
+    return {
+      ok: false as const,
+      status: 400,
+      error: 'Service type does not belong to the specified branch',
+    };
+  }
+
+  const startTime = new Date(data.startTime);
+  const endTime = new Date(data.endTime);
+
+  if (endTime <= startTime) {
+    return {
+      ok: false as const,
+      status: 400,
+      error: 'End time must be after start time',
+    };
+  }
+
+  return {
+    ok: true as const,
+    startTime,
+    endTime,
+  };
+}
+
+async function createSlots(req: Request, res: Response, payload: SlotCreatePayload[], isBulkRequest: boolean) {
+  const createdSlots = [];
+
+  for (let index = 0; index < payload.length; index += 1) {
+    const data = payload[index];
+    const validation = await validateSlotCreatePayload(req, data);
+
+    if (!validation.ok) {
+      res.status(validation.status).json({
+        success: false,
+        error: validation.error,
+        ...(isBulkRequest ? { details: [{ index }] } : {}),
+      });
+      return;
+    }
+
+    const slot = await prisma.slot.create({
+      data: {
+        branchId: data.branchId,
+        serviceTypeId: data.serviceTypeId,
+        startTime: validation.startTime,
+        endTime: validation.endTime,
+        capacity: SLOT_BOOKING_LIMIT,
+      },
+      select: {
+        id: true,
+        startTime: true,
+        endTime: true,
+        capacity: true,
+        bookedCount: true,
+        isActive: true,
+        createdAt: true,
+        branch: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+          },
+        },
+        serviceType: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            duration: true,
+          },
+        },
+      },
+    });
+
+    await logAudit(
+      req.user?.userId,
+      'SLOT_CREATED',
+      'Slot',
+      slot.id,
+      {
+        branchId: data.branchId,
+        serviceTypeId: data.serviceTypeId,
+        startTime: validation.startTime.toISOString(),
+        endTime: validation.endTime.toISOString(),
+        capacity: SLOT_BOOKING_LIMIT,
+      },
+      getIpAddressFromRequest(req)
+    );
+
+    createdSlots.push(slot);
+  }
+
+  res.status(201).json({
+    success: true,
+    data: isBulkRequest ? createdSlots : createdSlots[0],
+    message: isBulkRequest ? `Created ${createdSlots.length} time slots successfully` : 'Time slot created successfully',
+  });
 }
 
 async function getSlotAssignmentContext(slotId: string) {
@@ -222,8 +354,9 @@ router.post('/', authMiddleware,
   branchScopedMiddleware(true),
   async (req: Request, res: Response) => {
     try {
-      const validation = createSlotSchema.safeParse(req.body);
-      
+      const schema = Array.isArray(req.body) ? createSlotBulkSchema : createSlotSchema;
+      const validation = schema.safeParse(req.body);
+
       if (!validation.success) {
         res.status(400).json({
           success: false,
@@ -232,109 +365,38 @@ router.post('/', authMiddleware,
         });
         return;
       }
-      
-      const data = validation.data;
-      
-      // BRANCH_MANAGER can only create slots in their own branch
-      if (req.user?.role === 'BRANCH_MANAGER' && req.user?.branchId !== data.branchId) {
-        res.status(403).json({
-          success: false,
-          error: 'Access denied: Can only create slots in your assigned branch',
-        });
-        return;
-      }
-      
-      // Validate that service type exists and belongs to the branch
-      const serviceType = await prisma.serviceType.findUnique({
-        where: { id: data.serviceTypeId },
-        select: { id: true, branchId: true },
-      });
-      
-      if (!serviceType) {
-        res.status(400).json({
-          success: false,
-          error: 'Service type not found',
-        });
-        return;
-      }
-      
-      if (serviceType.branchId !== data.branchId) {
-        res.status(400).json({
-          success: false,
-          error: 'Service type does not belong to the specified branch',
-        });
-        return;
-      }
-      
-      // Validate time range
-      const startTime = new Date(data.startTime);
-      const endTime = new Date(data.endTime);
-      
-      if (endTime <= startTime) {
-        res.status(400).json({
-          success: false,
-          error: 'End time must be after start time',
-        });
-        return;
-      }
-      
-      const slot = await prisma.slot.create({
-        data: {
-          branchId: data.branchId,
-          serviceTypeId: data.serviceTypeId,
-          startTime,
-          endTime,
-          capacity: data.capacity,
-        },
-        select: {
-          id: true,
-          startTime: true,
-          endTime: true,
-          capacity: true,
-          bookedCount: true,
-          isActive: true,
-          createdAt: true,
-          branch: {
-            select: {
-              id: true,
-              name: true,
-              code: true,
-            },
-          },
-          serviceType: {
-            select: {
-              id: true,
-              name: true,
-              code: true,
-              duration: true,
-            },
-          },
-        },
-      });
-      
-      // Audit log: slot created
-      await logAudit(
-        req.user?.userId,
-        'SLOT_CREATED',
-        'Slot',
-        slot.id,
-        {
-          branchId: data.branchId,
-          serviceTypeId: data.serviceTypeId,
-          startTime: startTime.toISOString(),
-          endTime: endTime.toISOString(),
-          capacity: data.capacity,
-        },
-        getIpAddressFromRequest(req)
-      );
-      
-      res.status(201).json({
-        success: true,
-        data: slot,
-        message: 'Time slot created successfully',
-      });
+
+      const payload = (Array.isArray(validation.data) ? validation.data : [validation.data]) as SlotCreatePayload[];
+      await createSlots(req, res, payload, Array.isArray(validation.data));
     } catch (error) {
       console.error('Error creating slot:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Internal server error',
+      });
+    }
+  }
+);
+
+router.post('/bulk', authMiddleware,
+  roleMiddleware('ADMIN', 'BRANCH_MANAGER'),
+  branchScopedMiddleware(true),
+  async (req: Request, res: Response) => {
+    try {
+      const validation = createSlotBulkSchema.safeParse(req.body);
+
+      if (!validation.success) {
+        res.status(400).json({
+          success: false,
+          error: 'Validation failed',
+          details: validation.error.errors,
+        });
+        return;
+      }
+
+      await createSlots(req, res, validation.data as SlotCreatePayload[], true);
+    } catch (error) {
+      console.error('Error bulk creating slots:', error);
       res.status(500).json({
         success: false,
         error: 'Internal server error',
@@ -1039,15 +1101,8 @@ router.patch('/:id', authMiddleware,
       
       const updateData = validation.data;
       
-      // Validate capacity if being updated
       if (updateData.capacity !== undefined) {
-        if (updateData.capacity < existingSlot.bookedCount) {
-          res.status(400).json({
-            success: false,
-            error: `Cannot reduce capacity below current bookings (${existingSlot.bookedCount})`,
-          });
-          return;
-        }
+        updateData.capacity = SLOT_BOOKING_LIMIT;
       }
       
       // Validate service type if being updated

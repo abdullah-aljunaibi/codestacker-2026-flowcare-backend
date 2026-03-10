@@ -124,13 +124,15 @@ export const createSlotSchema = z.object({
   serviceTypeId: z.string(),
   startTime: z.string().datetime(),
   endTime: z.string().datetime(),
-  capacity: z.number().int().positive().default(1),
+  capacity: z.literal(1).default(1),
 });
 
 export const updateSlotSchema = createSlotSchema.partial();
+export const createSlotBulkSchema = z.array(createSlotSchema).min(1);
 
 export type CreateSlotInput = z.infer<typeof createSlotSchema>;
 export type UpdateSlotInput = z.infer<typeof updateSlotSchema>;
+export type CreateSlotBulkInput = z.infer<typeof createSlotBulkSchema>;
 
 // ============================================
 // Slot Assignment schemas
@@ -158,6 +160,12 @@ export const createAppointmentSchema = z.object({
 
 export const updateAppointmentSchema = z.object({
   status: z.enum([
+    'scheduled',
+    'checked-in',
+    'in-progress',
+    'completed',
+    'cancelled',
+    'no-show',
     'WAITING',
     'SERVING',
     'DONE',
