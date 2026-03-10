@@ -937,6 +937,47 @@ router.delete('/:id/assign-staff/:staffId', authMiddleware,
   }
 );
 
+// GET /api/slots/my-assignments - List slots assigned to the authenticated staff member
+router.get('/my-assignments', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    if (!req.user?.staffId) {
+      return res.status(403).json({
+        success: false,
+        error: 'Only staff members can view their assignments',
+      });
+    }
+
+    const assignments = await prisma.slotAssignment.findMany({
+      where: { staffId: req.user.staffId },
+      include: {
+        slot: {
+          include: {
+            branch: { select: { id: true, name: true, code: true } },
+            serviceType: { select: { id: true, name: true, code: true } },
+          },
+        },
+      },
+    });
+
+    const slots = assignments.map((a: any) => ({
+      assignmentId: a.id,
+      slotId: a.slot.id,
+      dayOfWeek: a.slot.dayOfWeek,
+      startTime: a.slot.startTime,
+      endTime: a.slot.endTime,
+      isActive: a.slot.isActive,
+      branch: a.slot.branch,
+      serviceType: a.slot.serviceType,
+      assignedAt: a.createdAt,
+    }));
+
+    return res.json({ success: true, data: slots });
+  } catch (error) {
+    console.error('Error fetching staff assignments:', error);
+    return res.status(500).json({ success: false, error: 'Failed to fetch assignments' });
+  }
+});
+
 // GET /api/slots/:id - Get slot details
 // Excludes soft-deleted slots by default. ADMIN can use ?includeDeleted=true to view deleted slots.
 router.get('/:id', authMiddleware, async (req: Request, res: Response) => {
