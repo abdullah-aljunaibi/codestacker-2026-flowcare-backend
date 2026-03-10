@@ -1,444 +1,548 @@
-# FlowCare Backend Current-State Audit
+# FlowCare Current-State Audit
 
-Date: March 10, 2026
-Scope: `src/` and `prisma/` against the FlowCare challenge contract in `~/.openclaw/workspace/knowledge/flowcare-master-prompt.md`
+Date: 2026-03-10
+Scope: `src/routes/*.ts`, `src/middleware/*.ts`, `src/utils/*.ts`, `prisma/schema.prisma`, `prisma/seed.ts`, `src/index.ts`
+Source of truth: `~/.openclaw/workspace/knowledge/flowcare-master-prompt.md`, `docs/REQUIREMENTS_TRACEABILITY.md`
 
-## Executive Assessment
+## Audit Summary
 
-Current state: **PARTIAL / non-compliant for several hard requirements**
+Overall status: `non-compliant`
 
-Highest-risk violations:
+Highest-risk contract failures:
 
-1. **Authentication contract is wrong**. The codebase is built around JWT bearer tokens, but the challenge requires Basic Authentication. See [src/middleware/auth.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/middleware/auth.ts#L18) and [src/routes/auth.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/auth.ts#L74).
-2. **Seed/bootstrap contract is wrong**. Seeding is manual, destructive, hard-coded, and not startup-driven. The challenge requires idempotent startup import from the provided JSON file. See [prisma/seed.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/prisma/seed.ts#L19) and [src/index.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/index.ts#L82).
-3. **Registration/file contract is wrong**. Customer ID upload is handled by a separate upload endpoint instead of inline during registration. See [src/routes/auth.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/auth.ts#L10) and [src/routes/uploads.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/uploads.ts#L202).
-4. **Retention configuration contract is wrong**. Retention days are passed as a query parameter instead of being persisted in the database and managed by admins. See [src/routes/slots.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/slots.ts#L242) and [prisma/schema.prisma](/home/abdullah/Projects/codestacker-2026-flowcare-backend/prisma/schema.prisma#L15).
-5. **Audit coverage is incomplete**. Audit writes exist for some slot, appointment, staff, and file events, but not for all required sensitive actions, and branch scoping is not populated consistently. See [src/utils/audit-logger.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/utils/audit-logger.ts#L31) and [prisma/schema.prisma](/home/abdullah/Projects/codestacker-2026-flowcare-backend/prisma/schema.prisma#L213).
+1. Authentication is JWT/Bearer, not required Basic Auth.
+2. Registration does not include inline customer-ID image upload.
+3. Seed import is manual, hard-coded, destructive, and not startup-driven.
+4. Retention days are query-driven, not DB-backed and admin-configurable.
+5. Audit coverage and branch scoping are incomplete.
 
-## Route-By-Route Assessment
+## 1. File-By-File Audit
+
+### `src/index.ts`
+
+What it currently does:
+- Boots Express, enables CORS and JSON parsing, exposes `GET /health`, mounts all routers, and starts listening immediately.
+- Mounts the same upload router twice: `/api/uploads` and `/api/files` (`lines 62-63`).
+
+What the challenge requires:
+- Startup must ensure the system has a default Admin user.
+- Seed import must run at startup, read the provided JSON file, and be idempotent.
+- All non-public APIs must be protected by the required Basic Auth contract.
+
+Specific violations:
+- `lines 53-63`: mounts routers that are implemented around JWT auth, so the protected API surface is wired to the wrong auth contract.
+- `lines 62-63`: mounts upload routes under both `/api/uploads` and `/api/files`, creating duplicate public API surface that is not reflected in the challenge contract.
+- `lines 82-87`: starts the server without any startup seed/bootstrap hook, so default admin and JSON import are not guaranteed at startup.
+
+Required changes:
+- Add startup bootstrap before `app.listen()` for idempotent JSON seed import and default admin assurance.
+- Replace JWT-based route protection assumptions with Basic Auth middleware.
+- Rationalize file-route mounting so only the intended contract paths remain.
+
+### `src/middleware/auth.ts`
+
+What it currently does:
+- Parses `Authorization: Bearer <token>`, verifies JWT, and enriches `req.user` with branch/customer profile context.
+- Provides role, branch-scope, ownership, and optional-auth helpers.
+
+What the challenge requires:
+- Basic Authentication is required.
+- All protected routes must use the required auth mechanism.
+- Role and branch isolation must work on top of that Basic Auth contract.
+
+Specific violations:
+- `lines 18-19`: defines JWT secret state, showing the auth layer is token-based.
+- `lines 30-40`: explicitly requires `Bearer` authorization.
+- `lines 42-44` and `287-288`: verifies JWT and trusts token claims instead of Basic credentials.
+- `lines 271-314`: optional JWT auth exists even though the contract only names public endpoints plus protected Basic-auth endpoints.
+
+Required changes:
+- Replace JWT parsing with Basic Auth credential parsing and user lookup.
+- Rebuild `req.user` enrichment from database-backed user/session context after Basic verification.
+- Keep RBAC and branch-scoping helpers, but make them independent of JWT payloads.
+
+### `src/middleware/upload.ts`
+
+What it currently does:
+- Stores files under `uploads/`, `uploads/customer-ids/`, or `uploads/appointment-attachments/`.
+- Accepts images and PDFs up to 5 MB.
+
+What the challenge requires:
+- Customer registration must include required ID-image upload inline.
+- Appointment attachments are optional, but retrieval must enforce permissions and content-type.
+- Secure file handling must support the route contract.
+
+Specific violations:
+- `lines 12-15`: route file handling is keyed only by field name, not by a registration workflow or stricter contract-specific validation.
+- `lines 36-45`: allows PDF upload for customer ID images even though the prompt speaks in terms of a required ID image.
+- `lines 56-62`: upload policy is standalone; it is not integrated into registration, which is the required path.
+
+Required changes:
+- Split validation by use case: stricter customer-ID image validation during registration, optional appointment-attachment validation separately.
+- Wire ID upload middleware directly into registration instead of a separate follow-up endpoint.
+
+### `src/utils/audit-logger.ts`
+
+What it currently does:
+- Persists audit rows with `userId`, `action`, `entity`, `entityId`, `metadata`, and `ipAddress`.
+- Exposes a response-hook audit helper and request IP extraction.
+
+What the challenge requires:
+- Audit logs must capture sensitive actions with required fields, including branch context where needed.
+- Admin must be able to view/export all logs; manager view must be branch-only.
+
+Specific violations:
+- `lines 40-48`: never writes `branchId` to the `AuditLog` row even though the schema supports it, so manager branch filtering is only as good as individual callers manually embedding branch info inside `metadata`.
+- `lines 6-22`: action enum omits several challenge-critical events from actual coverage flow, including branch/service mutations, retention configuration changes, startup import, and file-permission-sensitive reads.
+- `lines 78-109`: generic middleware exists but is not used across most mutating routes.
+
+Required changes:
+- Persist `branchId` as a first-class audit column.
+- Expand audited actions to cover all required sensitive operations.
+- Standardize route usage so every sensitive mutation and sensitive file access is audited consistently.
+
+### `src/utils/file-storage.ts`
+
+What it currently does:
+- Provides helper paths for upload directories plus simple file metadata and deletion helpers.
+
+What the challenge requires:
+- Secure file handling for ID images and appointment attachments.
+- Reviewer-safe, consistent storage behavior.
+
+Specific violations:
+- `lines 42-45`: file extension validation duplicates permissive upload rules and still treats PDF as valid for ID-image use.
+- `lines 79-95`: `getFileMetadata()` returns blank MIME type and uses filename as original name, so it is not sufficient for a secure retrieval contract.
+- `lines 105-118`: directory bootstrap helper exists but is not called from startup.
+
+Required changes:
+- Align helper rules with the final registration/attachment contract.
+- Track and return actual metadata needed for permissioned retrieval.
+- Call directory bootstrap from startup if local disk storage remains.
+
+### `src/utils/jwt.ts`
+
+What it currently does:
+- Signs and verifies JWT bearer tokens.
+
+What the challenge requires:
+- Basic Authentication, not JWT.
+
+Specific violations:
+- `lines 4-14`: entire utility is an anti-spec implementation because Basic Auth is required and the master prompt explicitly forbids JWT as a substitute.
+
+Required changes:
+- Remove JWT auth from the request contract.
+- Replace this utility with Basic-auth credential verification helpers if a shared auth utility is still needed.
 
 ### `src/routes/auth.ts`
 
-Endpoints:
+What it currently does:
+- `POST /api/auth/register`: JSON-only user registration, optional caller-supplied role, auto-created customer profile with fabricated `idNumber` and fixed DOB, returns JWT token.
+- `POST /api/auth/login`: email/password login returning JWT token.
 
-- `POST /api/auth/register`
-- `POST /api/auth/login`
+What the challenge requires:
+- Public customer registration with required ID-image upload stored during registration.
+- Login/auth flow that satisfies Basic Auth.
+- Default admin existence independent of ad hoc registration.
 
-Challenge requires:
+Specific violations:
+- `lines 13-24`: registration only validates JSON body; no multipart handling and no ID-image file.
+- `lines 24-25` and `49`: accepts caller-supplied `role`, allowing non-customer registration through the public route.
+- `lines 64-69`: fabricates customer `idNumber` and `dateOfBirth` instead of collecting required customer data.
+- `lines 74-87` and `154-175`: both registration and login issue JWT tokens instead of Basic-auth responses.
+- `lines 99-175`: login contract is token issuance rather than credential validation for Basic-auth usage.
+- Entire file has no audit logging for `USER_REGISTERED` or `USER_LOGIN`.
 
-- Public registration that includes required customer fields and **ID image upload during registration**
-- Login/authentication that satisfies the **Basic Auth** contract
-- Default admin existence independent of manual seeding
-
-Current behavior:
-
-- `register` accepts JSON only, creates a `User`, auto-creates a `Customer` with generated placeholder `idNumber` and fixed DOB, and returns a JWT token. See [src/routes/auth.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/auth.ts#L11).
-- `login` validates email/password and returns a JWT token. See [src/routes/auth.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/auth.ts#L99).
-
-Gap analysis:
-
-- **FAIL / CRITICAL**: Uses JWT issuance instead of Basic Auth.
-- **FAIL / CRITICAL**: Registration does not accept inline file upload for customer ID.
-- **FAIL / HIGH**: Registration schema omits required customer fields from the challenge flow and fabricates `idNumber` / `dateOfBirth`.
-- **FAIL / HIGH**: `role` can be supplied by the caller during registration, which is broader than the expected customer-facing registration contract. See [src/types/index.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/types/index.ts#L6).
-- **PARTIAL**: Public auth endpoints exist, but they implement the wrong auth mechanism.
+Required changes:
+- Convert registration to multipart form handling with inline ID-image upload and challenge-required customer fields.
+- Restrict public registration to customer creation only.
+- Replace JWT login/token issuance with Basic-auth-compliant credential handling.
+- Add audit logging for registration and login.
 
 ### `src/routes/appointments.ts`
 
-Endpoints:
+What it currently does:
+- Auth-protected router for appointment list, create, read, patch, and delete.
+- Supports booking, status changes, direct cancellation, and hard deletion.
 
-- `GET /api/appointments`
-- `POST /api/appointments`
-- `GET /api/appointments/:id`
-- `PATCH /api/appointments/:id`
-- `DELETE /api/appointments/:id`
+What the challenge requires:
+- Customers can book, cancel, reschedule, and view only their own appointments.
+- Staff can view assigned schedule and update appointment status.
+- Manager/admin visibility must be correctly scoped.
 
-Challenge requires:
+Specific violations:
+- `line 11`: router protection depends on non-compliant JWT middleware.
+- `lines 156-159`: customer identity is auto-filled from JWT state rather than Basic-auth-backed context.
+- `lines 190-236`: booking validates slot capacity and service type but never verifies `data.branchId === slot.branchId`.
+- `lines 238-298`: booking creates appointments without duplicate-slot booking protection for the same customer.
+- `lines 428-491`: update schema and handler do not accept or process a new `slotId`, so reschedule is missing.
+- `lines 463-487`: status flow updates timestamps, but there is no strong transition validation beyond a few happy-path checks.
+- `lines 575-614`: `DELETE` hard-deletes the appointment record, which destroys history instead of preserving a cancelled appointment record.
+- `lines 530-550`: audit only covers status changes; read access, reschedule, and delete-vs-cancel distinction are incomplete.
 
-- Authenticated customers can book, cancel, reschedule, and view their own appointments
-- Staff can view assigned schedule and update status
-- Managers have branch-scoped visibility
-- Attachments, if supported, must have permissioned retrieval
-
-Current behavior:
-
-- Auth is enforced via JWT middleware for the whole router. See [src/routes/appointments.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/appointments.ts#L10).
-- `POST` books an appointment and increments slot `bookedCount`. See [src/routes/appointments.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/appointments.ts#L137).
-- `PATCH` updates appointment status and timestamps. See [src/routes/appointments.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/appointments.ts#L426).
-- `DELETE` hard-deletes the appointment after decrementing slot count. See [src/routes/appointments.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/appointments.ts#L575).
-
-Gap analysis:
-
-- **FAIL / CRITICAL**: Protected by JWT, not Basic Auth.
-- **FAIL / HIGH**: No dedicated reschedule flow; `PATCH` cannot change `slotId`, so required reschedule behavior is missing.
-- **FAIL / HIGH**: `DELETE` permanently removes appointments instead of preserving a cancellable record and audit trail.
-- **FAIL / HIGH**: Booking does not validate that `branchId` matches the selected slot’s branch, so inconsistent branch data can be written. See [src/routes/appointments.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/appointments.ts#L190).
-- **FAIL / HIGH**: No protection against duplicate customer booking of the same slot beyond `bookedCount`; there is no uniqueness rule or explicit duplicate check.
-- **PARTIAL**: Ownership and branch scoping are present, but staff schedule is indirect rather than a clear assigned-schedule endpoint.
+Required changes:
+- Rework auth dependency to Basic Auth.
+- Add explicit reschedule workflow that swaps slots transactionally and preserves appointment history.
+- Validate slot/branch consistency and duplicate booking constraints.
+- Replace hard delete with contract-compliant cancellation behavior.
+- Tighten staff visibility to assigned schedule where required.
 
 ### `src/routes/audit.ts`
 
-Endpoints:
+What it currently does:
+- `GET /api/audit`: admin gets all logs, branch manager gets branch-filtered logs.
+- `GET /api/audit/export`: admin exports CSV of all logs.
 
-- `GET /api/audit`
-- `GET /api/audit/export`
+What the challenge requires:
+- Admin can view/export all logs.
+- Manager can view branch-only logs.
+- Underlying audit rows must contain the required fields and branch scope.
 
-Challenge requires:
+Specific violations:
+- `lines 57-68`: manager filtering depends on `AuditLog.branchId`, but many audit writes never populate that column.
+- `lines 121-196`: export works only as well as underlying audit completeness; current audit dataset is missing required events from auth, branch/service changes, and retention configuration.
 
-- Admin can view/export all audit logs
-- Manager can view branch-only audit logs
-- Audit logs must capture required sensitive actions with required fields
-
-Current behavior:
-
-- Admin can list all logs and export CSV. See [src/routes/audit.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/audit.ts#L12) and [src/routes/audit.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/audit.ts#L121).
-- Branch managers are filtered to `branchId`. See [src/routes/audit.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/audit.ts#L57).
-
-Gap analysis:
-
-- **PARTIAL / HIGH**: Route surface matches the challenge, but underlying audit rows often have no `branchId` because `logAudit()` does not persist branch context unless each caller provides it explicitly. See [src/utils/audit-logger.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/utils/audit-logger.ts#L40).
-- **FAIL / HIGH**: Missing coverage for several required sensitive actions, including login, registration, branch/service management, and retention configuration changes.
-- **FAIL / MEDIUM**: CSV export is system-wide for admin only, which is correct, but there is no manager-specific export if the challenge expects branch-level export as part of audit reviewer UX.
+Required changes:
+- Keep route surface, but fix upstream audit write quality.
+- Verify branch context is always stored so manager filtering is reliable.
 
 ### `src/routes/branches.ts`
 
-Endpoints:
+What it currently does:
+- Public branch list plus authenticated branch CRUD.
 
-- `GET /api/branches`
-- `POST /api/branches`
-- `GET /api/branches/:id`
-- `PATCH /api/branches/:id`
-- `DELETE /api/branches/:id`
+What the challenge requires:
+- Public branch discovery.
+- Admin can manage all branches.
+- Managers are branch-scoped.
+- Sensitive actions should be audited.
 
-Challenge requires:
+Specific violations:
+- `lines 21-25`: public `GET /api/branches` conditionally changes output based on `req.user`, but there is no optional auth middleware mounted here, so branch scoping inside the public handler is effectively dead logic.
+- `line 136`: `GET /api/branches/:id` is authenticated only, which is stricter than the public-discovery surface expected by the challenge.
+- `lines 247-262` and `291-293`: update/delete are implemented with no audit logging.
+- `lines 287-293`: delete is destructive hard delete.
 
-- Public branch listing endpoint
-- Admin manages all branches
-- Manager branch scope only
-
-Current behavior:
-
-- `GET /api/branches` is public because no auth middleware is attached. See [src/routes/branches.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/branches.ts#L14).
-- Branch CRUD exists for admins/managers. See [src/routes/branches.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/branches.ts#L68).
-
-Gap analysis:
-
-- **PARTIAL / MEDIUM**: Public listing exists and aligns with the contract.
-- **FAIL / HIGH**: Public branch detail is not available because `GET /:id` requires auth, which is stricter than the public-discovery contract if detailed branch lookup is expected.
-- **FAIL / MEDIUM**: Delete is hard delete; challenge emphasis is on branch-safe operations and reviewer reproducibility, so destructive deletes are risky.
-- **FAIL / MEDIUM**: No audit logging for branch create/update/delete.
+Required changes:
+- Preserve public listing and decide whether public branch detail is required by the final contract.
+- Add audit logging for create/update/delete.
+- Prefer deactivation over destructive deletion if branch lifecycle needs to be reviewer-safe.
 
 ### `src/routes/customers.ts`
 
-Endpoints:
+What it currently does:
+- Auth-protected customer list, create, read, and update endpoints.
+- Exposes customer personal data plus appointment history.
 
-- `GET /api/customers`
-- `POST /api/customers`
-- `GET /api/customers/:id`
-- `PATCH /api/customers/:id`
+What the challenge requires:
+- Registration must own customer creation.
+- Customer ID retrieval must be admin-only.
+- Customer/self-service visibility must avoid leaking sensitive ID data.
 
-Challenge requires:
+Specific violations:
+- `line 10`: all routes depend on JWT auth.
+- `lines 56-63`: list response exposes `idNumber` and `idImageUrl` to any authorized role allowed by the branch/customer filters.
+- `lines 210-218`: detail response exposes `idNumber` and `idImageUrl` to customer, staff, and manager callers.
+- `lines 101-170`: separate `POST /api/customers` creation path duplicates registration concerns and allows post-hoc profile creation instead of the required inline registration contract.
+- `lines 329-399`: update path allows admin, manager, and staff to update sensitive customer ID fields without an admin-only restriction.
+- Entire file has no audit logging.
 
-- Customer registration path with required ID image upload
-- Customer can access own profile/history
-- Customer ID retrieval must be admin-only
-
-Current behavior:
-
-- Router is JWT-protected. See [src/routes/customers.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/customers.ts#L9).
-- CRUD-like customer profile operations exist after auth. See [src/routes/customers.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/customers.ts#L16).
-
-Gap analysis:
-
-- **FAIL / CRITICAL**: Registration is not implemented here and is split across `auth` plus uploads.
-- **FAIL / HIGH**: `GET /api/customers` and `GET /api/customers/:id` return `idNumber` and `idImageUrl` to non-admin roles, including customers and branch staff/managers, which violates the requirement that customer ID retrieval be admin-only. See [src/routes/customers.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/customers.ts#L56) and [src/routes/customers.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/customers.ts#L210).
-- **FAIL / HIGH**: `PATCH` allows branch staff/managers to update any customer profile, not branch-scoped only and not admin-only for ID-related data. See [src/routes/customers.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/customers.ts#L358).
-- **FAIL / MEDIUM**: No audit logging for customer profile create/update.
+Required changes:
+- Move customer creation responsibility into registration.
+- Strip ID fields from non-admin customer APIs.
+- Limit sensitive customer-field updates to the correct roles.
+- Add audit logging for customer mutations.
 
 ### `src/routes/queue.ts`
 
-Endpoints:
+What it currently does:
+- Declares four queue routes that all return `501 Not implemented`.
 
-- `GET /api/queue/status`
-- `POST /api/queue/join`
-- `GET /api/queue/my-status`
-- `POST /api/queue/leave`
+What the challenge requires:
+- Queue work is bonus-only after required scope passes.
+- No placeholder routes should distract from the required contract.
 
-Challenge requires:
+Specific violations:
+- `lines 5-71`: unfinished placeholder endpoints add dead API surface.
 
-- Queue endpoints are not part of the listed must-have contract; bonus work is only allowed after required items pass.
-
-Current behavior:
-
-- All endpoints return `501 Not implemented`. See [src/routes/queue.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/queue.ts#L5).
-
-Gap analysis:
-
-- **NEUTRAL / LOW**: These routes are outside the required scope, but they add unfinished surface area and reviewer noise.
-- **MEDIUM reviewer risk**: Placeholder endpoints reinforce that the repo is not aligned to the “no TODO / no placeholder routes in required scope” principle from the master prompt.
+Required changes:
+- Remove the routes from the submission surface or fully implement them later as bonus work only after required compliance is complete.
 
 ### `src/routes/service-types.ts`
 
-Endpoints:
+What it currently does:
+- Public service-type listing plus authenticated CRUD.
 
-- `GET /api/service-types`
-- `POST /api/service-types`
-- `GET /api/service-types/:id`
-- `PATCH /api/service-types/:id`
-- `DELETE /api/service-types/:id`
+What the challenge requires:
+- Public services-by-branch endpoint.
+- Admin/manager branch-scoped management.
+- Audit sensitive changes.
 
-Challenge requires:
+Specific violations:
+- `lines 17-34`: public listing is generic and optional-query-driven, not an explicit services-by-branch public contract.
+- `line 163`: `GET /api/service-types/:id` requires auth, which weakens public discovery.
+- `lines 121-145`, `299-318`, `372-374`: create/update/delete have no audit logging.
+- `lines 372-374`: delete is hard delete.
 
-- Public endpoint for services by branch
-- Admin/manager branch-scoped management
-
-Current behavior:
-
-- `GET /api/service-types` is public and supports `branchId` query filtering. See [src/routes/service-types.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/service-types.ts#L15).
-- CRUD exists for authenticated admins/managers. See [src/routes/service-types.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/service-types.ts#L75).
-
-Gap analysis:
-
-- **PARTIAL / MEDIUM**: Public “services by branch” can be approximated via `GET /api/service-types?branchId=...`, but the contract calls for an explicit public endpoint for services by branch, not an implicit generic list.
-- **FAIL / MEDIUM**: Public `GET /api/service-types` is not limited to active branches/services by default.
-- **FAIL / MEDIUM**: `GET /:id` requires auth, which weakens public discovery of branch services.
-- **FAIL / MEDIUM**: No audit logging for service type create/update/delete.
+Required changes:
+- Expose a clear public branch-service discovery contract.
+- Add audit logging for create/update/delete.
+- Reconsider destructive delete behavior if reviewer-safe lifecycle management is needed.
 
 ### `src/routes/slots.ts`
 
-Endpoints:
+What it currently does:
+- Public slot listing plus authenticated slot CRUD, retention cleanup, preview, soft delete, and restore.
 
-- `GET /api/slots`
-- `POST /api/slots`
-- `POST /api/slots/cleanup-retention`
-- `GET /api/slots/retention-preview`
-- `GET /api/slots/:id`
-- `PATCH /api/slots/:id`
-- `DELETE /api/slots/:id`
+What the challenge requires:
+- Public available slots by branch + service + optional date.
+- Slot removal must be soft delete.
+- Normal listings must hide soft-deleted slots.
+- Retention days must live in the database and be admin-configurable.
+- Cleanup must be idempotent.
 
-Challenge requires:
+Specific violations:
+- `lines 18-19`: public filter shape is `startDate/endDate`; the challenge matrix expects an availability contract with optional date input.
+- `lines 59-63`: uses `prisma.slot.fields.capacity` in query construction; that is not a valid persisted capacity comparison for Prisma queries and is a correctness bug for availability filtering.
+- `line 245` and `line 357`: cleanup and preview are admin-only, but both are driven by `req.query.days` instead of DB-backed retention settings.
+- `lines 249-262` and `361-374`: default retention is hard-coded to 30 days, not stored in the database.
+- Entire file has no endpoint to configure retention days.
+- `line 433`: slot detail requires auth even though slot availability is supposed to be publicly discoverable.
+- `lines 779-791`: audit row for delete does not populate `AuditLog.branchId` first-class.
 
-- Public endpoint for available slots by branch + service + optional date
-- Slot deletion must be soft delete
-- Soft-deleted slots hidden from normal listings
-- Retention days stored in DB and configurable by admin only
-- Cleanup idempotent
-
-Current behavior:
-
-- `GET /api/slots` is public and supports branch/service/date filters. See [src/routes/slots.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/slots.ts#L16).
-- `DELETE /api/slots/:id` soft-deletes by setting `deletedAt`. See [src/routes/slots.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/slots.ts#L709).
-- Retention cleanup is admin-only, but configured through `?days=` query input. See [src/routes/slots.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/slots.ts#L242).
-
-Gap analysis:
-
-- **PARTIAL / MEDIUM**: Public available-slot listing exists, but the route is generic rather than an explicit public availability contract.
-- **FAIL / CRITICAL**: No DB-backed retention configuration model or admin config endpoint.
-- **FAIL / HIGH**: Cleanup is manually invoked via endpoint rather than driven by persisted retention policy.
-- **FAIL / HIGH**: `GET /api/slots/:id` requires auth, which is stricter than the public availability requirement.
-- **FAIL / MEDIUM**: `GET /api/slots` uses `prisma.slot.fields.capacity` in the filter. That is not a valid persisted rule for enforcing “bookedCount < capacity” at the DB level and is a correctness risk. See [src/routes/slots.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/slots.ts#L59).
-- **PARTIAL**: Soft delete behavior is present and default exclusion of deleted slots is present.
+Required changes:
+- Fix slot availability query semantics.
+- Add DB-backed retention configuration model and admin-only config route.
+- Make cleanup consume stored retention days and remain idempotent.
+- Revisit public slot-detail/discovery contract.
 
 ### `src/routes/staff.ts`
 
-Endpoints:
+What it currently does:
+- Auth-protected staff list/create/read/update/delete.
+- Enforces branch scope for managers and staff.
+- Returns recent appointments and slot assignments on staff detail.
 
-- `GET /api/staff`
-- `POST /api/staff`
-- `GET /api/staff/:id`
-- `PATCH /api/staff/:id`
-- `DELETE /api/staff/:id`
+What the challenge requires:
+- Staff and managers have branch-scoped visibility.
+- Staff can view assigned schedule.
+- Sensitive staff assignment changes are audited.
 
-Challenge requires:
+Specific violations:
+- `line 11`: router protection depends on JWT auth.
+- `lines 17-72`: list endpoint returns branch staff, but there is no dedicated assigned-schedule endpoint for the logged-in staff member.
+- `lines 89-159`: staff creation requires pre-existing `User` records, but there is no compliant admin/staff account bootstrap flow tied to the required Basic-auth contract.
+- `lines 482-484`: delete is hard delete.
+- Audit exists for assignment changes, but no audit exists for view actions or downstream schedule/appointment access.
 
-- Staff and managers have branch-scoped visibility
-- Staff can view their schedule / assigned appointments
-- Staff/managers can update appointment status within scope
-
-Current behavior:
-
-- Router is auth-protected. See [src/routes/staff.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/staff.ts#L10).
-- Branch-scoped listing and CRUD exist. See [src/routes/staff.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/staff.ts#L13).
-
-Gap analysis:
-
-- **PARTIAL / MEDIUM**: Branch-scoped staff management exists.
-- **FAIL / MEDIUM**: No explicit staff schedule endpoint; schedule data is only embedded in staff detail via recent `slotAssignments`.
-- **FAIL / MEDIUM**: Staff creation assumes the user account already exists; there is no end-to-end staff onboarding flow tied to the challenge contract.
-- **FAIL / LOW**: Delete is hard delete; reviewer-safe administrative changes usually should preserve history.
+Required changes:
+- Keep branch-scoped RBAC logic, but move it under Basic Auth.
+- Add explicit assigned-schedule behavior if required by reviewer checks.
+- Rework staff lifecycle so user creation/assignment is challenge-compliant.
 
 ### `src/routes/uploads.ts`
 
-Endpoints:
+What it currently does:
+- JWT-protected file retrieval for customer IDs and appointment attachments.
+- Separate upload endpoints for customer IDs and appointment attachments.
 
-- `GET /api/files/customer-id/:customerId`
-- `GET /api/files/appointment/:appointmentId/attachment`
-- `POST /api/uploads/customer-id`
-- `POST /api/uploads/appointment-attachment`
+What the challenge requires:
+- Customer ID image must be uploaded during registration, not as a substitute endpoint.
+- Customer ID retrieval must be admin-only.
+- Appointment attachment retrieval must enforce permissions and content-type.
 
-Challenge requires:
+Specific violations:
+- `line 14`: file routes depend on JWT auth.
+- `lines 210-321`: separate customer-ID upload endpoint is a forbidden substitution for inline registration upload.
+- `lines 210-238`: a customer can upload ID after account creation without any registration-time requirement.
+- `lines 281-286` and `397-402`: stores raw file path strings only; there is no richer file metadata model.
+- `lines 24-437`: because the router is mounted under both `/api/uploads` and `/api/files`, all four handlers are reachable under both prefixes, expanding the API surface beyond the described contract.
 
-- Customer registration must include ID image upload inline
-- Customer ID retrieval must be admin-only
-- Appointment attachment retrieval must enforce permissions and content type
+Required changes:
+- Fold customer-ID upload into registration.
+- Keep admin-only ID retrieval and appointment-attachment retrieval, but switch them to Basic-auth-backed access control.
+- Reduce duplicate route mounting and clarify canonical file endpoints.
 
-Current behavior:
+### `prisma/schema.prisma`
 
-- Auth is required for the whole router. See [src/routes/uploads.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/uploads.ts#L13).
-- Customer ID retrieval is admin-only. See [src/routes/uploads.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/uploads.ts#L17).
-- Appointment attachment retrieval enforces role/ownership and sets `Content-Type`. See [src/routes/uploads.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/uploads.ts#L95).
+What it currently does:
+- Defines `User`, `Customer`, `Staff`, `Branch`, `ServiceType`, `Slot`, `SlotAssignment`, `Appointment`, and `AuditLog`.
+- Uses PostgreSQL Prisma models with soft-delete support for `Slot`.
 
-Gap analysis:
+What the challenge requires:
+- Required entities: `Branch`, `ServiceType`, `Slot`, `Staff`, `Customer`, `Appointment`, `AuditLog`.
+- DB-backed retention days configuration.
+- Branch context on audit logs.
+- Data model that supports required workflows safely.
 
-- **FAIL / CRITICAL**: Separate upload endpoints are used as a substitute for inline registration upload.
-- **PARTIAL / MEDIUM**: Attachment retrieval permissions and content type handling are present.
-- **FAIL / MEDIUM**: `customer.idImageUrl` and `appointment.attachmentUrl` are stored as URL-like strings beginning with `/uploads/...`; retrieval then joins them with `process.cwd()`, producing path handling that is brittle and easy to mis-resolve. See [src/routes/uploads.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/uploads.ts#L53) and [src/routes/uploads.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/uploads.ts#L160).
-- **FAIL / MEDIUM**: Upload routes permit PDF for customer ID, while the contract specifically calls for an ID image.
+Specific violations:
+- `lines 15-230`: no model exists for retention configuration, system settings, or any DB-backed `retentionDays` value.
+- `lines 173-201`: `Appointment` has `serviceTypeId String` but no `@relation` to `ServiceType`, weakening referential integrity for a core workflow field.
+- `lines 173-201`: no uniqueness constraint prevents the same customer from booking the same slot more than once.
+- `lines 213-223`: `AuditLog.branchId` exists as a plain string but has no relation or stronger integrity guarantee to `Branch`.
+- `lines 44-59`: `Customer.idImageUrl` is optional, which is inconsistent with a registration contract that requires ID-image storage at registration time.
 
-## Model Assessment
+Required changes:
+- Add a DB-backed retention settings model or equivalent.
+- Add missing appointment-to-service-type relation and any required booking uniqueness constraints.
+- Decide whether customer ID image should be required post-registration and enforce that consistently.
+- Consider stronger relational integrity for audit branch context.
 
-Required entities from the contract:
+### `prisma/seed.ts`
 
-- `Branch`
-- `ServiceType`
-- `Slot`
-- `Staff`
-- `Customer`
-- `Appointment`
-- `AuditLog`
+What it currently does:
+- Deletes all data, recreates admin, branches, services, staff, customers, slots, one sample appointment, and one audit row from hard-coded TypeScript data.
 
-Present in schema:
+What the challenge requires:
+- Seed data must import from the provided JSON file.
+- Seed import must happen at startup.
+- Seed behavior must be idempotent and non-destructive.
+- System must start with a default Admin user.
 
-- All required entities exist in [prisma/schema.prisma](/home/abdullah/Projects/codestacker-2026-flowcare-backend/prisma/schema.prisma#L43).
+Specific violations:
+- `lines 19-29`: destructive reset using `deleteMany()` across all domain tables; this is not idempotent reviewer-safe import.
+- `lines 36-46`, `52-322`: all seed data is hard-coded in TypeScript instead of imported from the provided JSON file.
+- `lines 31-351`: uses randomized phone numbers and generated IDs, so repeated runs do not converge to stable state.
+- `lines 328-341`: writes a `DATABASE_SEED` audit action that is not part of the typed audit action union in `src/utils/audit-logger.ts`.
+- File is not connected to startup anywhere in `src/index.ts`.
 
-Gaps and issues:
+Required changes:
+- Replace destructive seed with convergent import from the provided JSON artifact.
+- Invoke bootstrap from startup.
+- Keep default admin creation idempotent and separate from destructive reset behavior.
 
-- **FAIL / CRITICAL**: No database model for retention configuration. The contract requires retention days to be stored in the database and configurable by admin. There is no `SystemConfig`, `RetentionPolicy`, or equivalent table. See [prisma/schema.prisma](/home/abdullah/Projects/codestacker-2026-flowcare-backend/prisma/schema.prisma#L15).
-- **FAIL / HIGH**: Auth model is password/JWT-oriented through `User.password`, but there is no schema support for the required Basic Auth contract beyond raw credentials. The real issue is implementation, but the model reinforces the wrong flow.
-- **FAIL / HIGH**: `Customer.idNumber` and `Customer.idImageUrl` are nullable, even though registration requires capturing the customer ID artifact. See [prisma/schema.prisma](/home/abdullah/Projects/codestacker-2026-flowcare-backend/prisma/schema.prisma#L44).
-- **FAIL / HIGH**: `Appointment.serviceTypeId` is a scalar without a relation, so referential integrity is missing for a core required entity link. See [prisma/schema.prisma](/home/abdullah/Projects/codestacker-2026-flowcare-backend/prisma/schema.prisma#L173).
-- **FAIL / MEDIUM**: No uniqueness constraint prevents duplicate booking of the same slot by the same customer.
-- **FAIL / MEDIUM**: `AuditLog.branchId` is nullable and not derived automatically, which weakens manager-scoped audit visibility.
-- **FAIL / MEDIUM**: No persisted metadata for who deleted a slot, why it was deleted, or retention policy version at deletion time.
+## 2. Route-By-Route Compliance Check
 
-## Middleware Assessment
+`src/index.ts` mounts `src/routes/uploads.ts` under both `/api/uploads` and `/api/files`, so those handlers exist under both prefixes.
 
-### Auth
+| method | path | current purpose | mapped requirement | status | evidence |
+|---|---|---|---|---|---|
+| GET | `/health` | Health check | Reviewer UX / operability | compliant | `src/index.ts:41-50` |
+| POST | `/api/auth/register` | Public registration + JWT issuance | Registration with inline ID-image upload | non-compliant | `src/routes/auth.ts:11-88` |
+| POST | `/api/auth/login` | Email/password login returning JWT | Basic Authentication contract | non-compliant | `src/routes/auth.ts:99-175` |
+| GET | `/api/appointments` | List appointments by role | Customer/staff/manager appointment visibility | non-compliant | `src/routes/appointments.ts:17-135` |
+| POST | `/api/appointments` | Book appointment | Customer booking | non-compliant | `src/routes/appointments.ts:141-328` |
+| GET | `/api/appointments/:id` | Appointment detail | Customer own-appointment view | non-compliant | `src/routes/appointments.ts:331-424` |
+| PATCH | `/api/appointments/:id` | Status/cancel update | Cancel + reschedule + status workflow | non-compliant | `src/routes/appointments.ts:428-573` |
+| DELETE | `/api/appointments/:id` | Hard delete appointment | Cancel own appointment while preserving record | non-compliant | `src/routes/appointments.ts:576-648` |
+| GET | `/api/queue/status` | Placeholder queue status | Bonus only | non-compliant | `src/routes/queue.ts:7-20` |
+| POST | `/api/queue/join` | Placeholder queue join | Bonus only | non-compliant | `src/routes/queue.ts:24-37` |
+| GET | `/api/queue/my-status` | Placeholder queue status | Bonus only | non-compliant | `src/routes/queue.ts:41-54` |
+| POST | `/api/queue/leave` | Placeholder queue leave | Bonus only | non-compliant | `src/routes/queue.ts:58-71` |
+| GET | `/api/branches` | Public branch list | Public branches endpoint | compliant | `src/routes/branches.ts:14-66` |
+| POST | `/api/branches` | Create branch | Admin manages all branches | non-compliant | `src/routes/branches.ts:69-133` |
+| GET | `/api/branches/:id` | Branch detail | Public branch discovery / branch visibility | non-compliant | `src/routes/branches.ts:136-218` |
+| PATCH | `/api/branches/:id` | Update branch | Admin/managers manage branches in scope | non-compliant | `src/routes/branches.ts:221-284` |
+| DELETE | `/api/branches/:id` | Hard delete branch | Admin branch lifecycle | non-compliant | `src/routes/branches.ts:287-318` |
+| GET | `/api/service-types` | Public service-type list | Public services by branch | non-compliant | `src/routes/service-types.ts:15-73` |
+| POST | `/api/service-types` | Create service type | Admin/manager branch-scoped management | non-compliant | `src/routes/service-types.ts:76-160` |
+| GET | `/api/service-types/:id` | Service-type detail | Public service discovery | non-compliant | `src/routes/service-types.ts:163-237` |
+| PATCH | `/api/service-types/:id` | Update service type | Admin/manager branch-scoped management | non-compliant | `src/routes/service-types.ts:240-340` |
+| DELETE | `/api/service-types/:id` | Hard delete service type | Admin/manager branch-scoped management | non-compliant | `src/routes/service-types.ts:343-400` |
+| GET | `/api/slots` | Public slot list | Public available slots by branch/service/date | non-compliant | `src/routes/slots.ts:16-113` |
+| POST | `/api/slots` | Create slot | Admin/manager slot management | non-compliant | `src/routes/slots.ts:116-240` |
+| POST | `/api/slots/cleanup-retention` | Delete expired soft-deleted slots | Idempotent cleanup using DB-backed retention | non-compliant | `src/routes/slots.ts:245-352` |
+| GET | `/api/slots/retention-preview` | Preview cleanup | Reviewer/admin retention verification | non-compliant | `src/routes/slots.ts:357-429` |
+| GET | `/api/slots/:id` | Slot detail | Public slot discovery | non-compliant | `src/routes/slots.ts:433-551` |
+| PATCH | `/api/slots/:id` | Update slot | Admin/manager slot management | non-compliant | `src/routes/slots.ts:554-707` |
+| DELETE | `/api/slots/:id` | Soft delete slot | Slot soft delete | compliant | `src/routes/slots.ts:711-813` |
+| POST | `/api/slots/:id/restore` | Restore slot | Extra admin recovery flow | non-compliant | `src/routes/slots.ts:817-907` |
+| GET | `/api/staff` | Staff list | Branch-scoped staff visibility | non-compliant | `src/routes/staff.ts:17-86` |
+| POST | `/api/staff` | Create staff assignment | Branch-scoped staff management | non-compliant | `src/routes/staff.ts:89-214` |
+| GET | `/api/staff/:id` | Staff detail | Staff assigned schedule / branch visibility | non-compliant | `src/routes/staff.ts:217-323` |
+| PATCH | `/api/staff/:id` | Update staff assignment | Branch-scoped staff management | non-compliant | `src/routes/staff.ts:326-443` |
+| DELETE | `/api/staff/:id` | Delete staff assignment | Branch-scoped staff lifecycle | non-compliant | `src/routes/staff.ts:446-522` |
+| GET | `/api/customers` | Customer list | Customer/self-service data visibility | non-compliant | `src/routes/customers.ts:16-96` |
+| POST | `/api/customers` | Create customer profile | Registration / customer profile creation | non-compliant | `src/routes/customers.ts:101-203` |
+| GET | `/api/customers/:id` | Customer detail | Customer own profile / admin-only ID retrieval | non-compliant | `src/routes/customers.ts:206-327` |
+| PATCH | `/api/customers/:id` | Update customer | Customer profile update with proper permissions | non-compliant | `src/routes/customers.ts:330-420` |
+| GET | `/api/audit` | Audit list | Admin all logs, manager branch-only logs | non-compliant | `src/routes/audit.ts:12-119` |
+| GET | `/api/audit/export` | Audit CSV export | Admin export all logs | non-compliant | `src/routes/audit.ts:122-196` |
+| GET | `/api/uploads/customer-id/:customerId` | Retrieve customer ID image | Customer ID retrieval admin-only | non-compliant | `src/routes/uploads.ts:24-93`, `src/index.ts:62` |
+| GET | `/api/files/customer-id/:customerId` | Retrieve customer ID image | Customer ID retrieval admin-only | non-compliant | `src/routes/uploads.ts:24-93`, `src/index.ts:63` |
+| GET | `/api/uploads/appointment/:appointmentId/attachment` | Retrieve appointment attachment | Permissioned attachment retrieval | non-compliant | `src/routes/uploads.ts:104-200`, `src/index.ts:62` |
+| GET | `/api/files/appointment/:appointmentId/attachment` | Retrieve appointment attachment | Permissioned attachment retrieval | non-compliant | `src/routes/uploads.ts:104-200`, `src/index.ts:63` |
+| POST | `/api/uploads/customer-id` | Upload customer ID image | Registration must include inline ID upload | non-compliant | `src/routes/uploads.ts:210-321`, `src/index.ts:62` |
+| POST | `/api/files/customer-id` | Upload customer ID image | Registration must include inline ID upload | non-compliant | `src/routes/uploads.ts:210-321`, `src/index.ts:63` |
+| POST | `/api/uploads/appointment-attachment` | Upload appointment attachment | Optional attachment upload | non-compliant | `src/routes/uploads.ts:331-437`, `src/index.ts:62` |
+| POST | `/api/files/appointment-attachment` | Upload appointment attachment | Optional attachment upload | non-compliant | `src/routes/uploads.ts:331-437`, `src/index.ts:63` |
 
-Current state:
+Missing required routes or route behavior:
 
-- `authMiddleware` requires `Authorization: Bearer <jwt>` and verifies with `jsonwebtoken`. See [src/middleware/auth.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/middleware/auth.ts#L24).
-- `optionalAuthMiddleware` also assumes Bearer JWT. See [src/middleware/auth.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/middleware/auth.ts#L271).
+| missing item | mapped requirement | evidence |
+|---|---|---|
+| Basic-auth-protected API contract | `FC-MUST-001`, `FC-MUST-006` | No route or middleware parses Basic credentials; auth is JWT-only. |
+| Inline multipart registration with ID image | `FC-MUST-005` | Registration is JSON-only in `src/routes/auth.ts:11-88`. |
+| Admin-only DB-backed retention configuration route | `FC-MUST-013`, `FC-MUST-014` | No route exists in `src/routes/slots.ts`. |
+| Appointment reschedule route/behavior | `FC-MUST-007` | `PATCH /api/appointments/:id` cannot change slot. |
+| Startup bootstrap route behavior for seed import | `FC-MUST-002`, `FC-MUST-009`, `FC-MUST-010` | `src/index.ts:82-87` only starts the server. |
 
-Assessment:
+## 3. Prisma Schema Audit
 
-- **FAIL / CRITICAL**: Direct violation of the challenge requirement. JWT is explicitly forbidden as a replacement for Basic Auth.
-- **FAIL / HIGH**: Route protection is inconsistent with the challenge statement “all APIs are protected except explicitly public endpoints” because some public endpoints are implemented by simply omitting auth middleware rather than by a clearly defined public contract.
+### Models present
 
-### Upload handling
+| model | status | audit |
+|---|---|---|
+| `User` | partial | Supports email/password/role identity (`prisma/schema.prisma:16-34`), but the app uses it for JWT auth instead of Basic Auth. No explicit support for default-admin bootstrap beyond seed script behavior. |
+| `Customer` | partial | Contains `idNumber`, `dateOfBirth`, and `idImageUrl` (`44-59`). `idImageUrl` is optional even though registration must store required ID image. |
+| `Staff` | partial | Correctly relates user to branch (`62-81`). Supports manager flag and assignments, but staff-schedule workflows are not fully modeled in routes. |
+| `Branch` | partial | Core branch model exists (`84-105`). No lifecycle metadata beyond `isActive`; destructive delete is used in routes. |
+| `ServiceType` | partial | Core branch relation and fields exist (`108-128`). Appointment model does not relate back to it, weakening workflow integrity. |
+| `Slot` | partial | Has required branch/service/time/capacity fields and `deletedAt` for soft delete (`131-155`). Retention policy is not modeled in schema. |
+| `SlotAssignment` | partial | Supports assigned staff per slot (`158-170`). Good foundation for staff schedule, but not enough on its own to satisfy route contract. |
+| `Appointment` | partial | Core booking fields exist (`173-201`), but `serviceTypeId` is just a scalar string, not a relation. No uniqueness guard against duplicate booking of same slot by same customer. |
+| `AuditLog` | partial | Required entity exists (`213-230`) with `branchId`, metadata, and IP fields. `branchId` is not a relation and is often not populated by code. |
 
-Current state:
+### Missing models / fields / constraints against the challenge
 
-- Multer stores files on local disk under `uploads/`. See [src/middleware/upload.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/middleware/upload.ts#L7).
-- Allowed types include images and PDFs. See [src/middleware/upload.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/middleware/upload.ts#L36).
-- Max file size is 5 MB. See [src/middleware/upload.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/middleware/upload.ts#L55).
+| gap | why it matters | evidence |
+|---|---|---|
+| No DB-backed retention config model | Challenge requires retention days stored in DB and admin-configurable | `prisma/schema.prisma:15-230` |
+| No `Appointment.serviceType` relation | Core appointment-service integrity is not enforced | `prisma/schema.prisma:173-201` |
+| No uniqueness on appointment booking per customer/slot | Challenge acceptance includes customer booking one slot once only | `prisma/schema.prisma:173-201` |
+| `Customer.idImageUrl` optional | Registration is supposed to store required ID image | `prisma/schema.prisma:50` |
+| `AuditLog.branchId` not relational | Branch-only audit filtering is weaker and easier to corrupt | `prisma/schema.prisma:220` |
 
-Assessment:
+## 4. Ordered Change List With Effort
 
-- **PARTIAL / MEDIUM**: Basic size/type validation exists.
-- **FAIL / HIGH**: Upload handling is not integrated into registration.
-- **FAIL / MEDIUM**: Customer ID upload accepts PDFs even though the requirement is an ID image.
-- **FAIL / MEDIUM**: Storage strategy is path-string based and not modeled as a first-class protected asset record.
+| order | file | why it changes first | estimated effort |
+|---|---|---|---|
+| 1 | `src/middleware/auth.ts` | Core contract blocker: every protected route depends on wrong auth mechanism | large |
+| 2 | `src/routes/auth.ts` | Registration and login both violate hard requirements | large |
+| 3 | `prisma/schema.prisma` | Needed for retention config, stronger appointment integrity, and registration/file constraints | large |
+| 4 | `prisma/seed.ts` | Startup JSON import and idempotency are hard blockers | large |
+| 5 | `src/index.ts` | Must run bootstrap at startup and clean route mounting | medium |
+| 6 | `src/routes/appointments.ts` | Missing reschedule and wrong cancellation semantics | large |
+| 7 | `src/routes/uploads.ts` | Must fold ID upload into registration and keep secure retrieval | medium |
+| 8 | `src/routes/slots.ts` | Retention config and availability correctness are still open | large |
+| 9 | `src/utils/audit-logger.ts` | Required so audit visibility and exports become trustworthy | medium |
+| 10 | `src/routes/customers.ts` | Currently leaks ID data and duplicates registration concerns | medium |
+| 11 | `src/routes/branches.ts` | Needs audit coverage and possible public-detail adjustment | medium |
+| 12 | `src/routes/service-types.ts` | Needs public-contract cleanup and audit coverage | medium |
+| 13 | `src/routes/staff.ts` | Mostly structural cleanup after auth/schema fixes | medium |
+| 14 | `src/middleware/upload.ts` | Validation should match final registration/attachment contract | small |
+| 15 | `src/utils/file-storage.ts` | Supporting utility cleanup after storage contract is settled | small |
+| 16 | `src/routes/audit.ts` | Route surface is close; depends on upstream audit fixes | small |
+| 17 | `src/utils/jwt.ts` | Remove or replace once auth refactor lands | small |
+| 18 | `src/routes/queue.ts` | Remove or defer placeholder bonus routes | small |
 
-### Error handling
+## 5. PASS / PARTIAL / FAIL Snapshot
 
-Current state:
-
-- Global error handler returns a generic 500. See [src/index.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/index.ts#L73).
-- Route handlers mostly do their own `try/catch`.
-- Multer errors are handled separately. See [src/middleware/upload.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/middleware/upload.ts#L64).
-
-Assessment:
-
-- **PARTIAL / LOW**: There is a catch-all handler.
-- **FAIL / MEDIUM**: Error handling is fragmented and not normalized; validation, Prisma, and auth failures are shaped differently across routes.
-- **FAIL / LOW**: The global handler drops context and does not map known operational errors into stable API errors.
-
-## Specific Violations Required To Flag
-
-- **JWT auth instead of Basic Auth**: confirmed in [src/middleware/auth.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/middleware/auth.ts#L18) and [src/utils/jwt.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/utils/jwt.ts).
-- **Manual seed instead of startup import**: confirmed in [prisma/seed.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/prisma/seed.ts#L16) and absence of startup import logic in [src/index.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/index.ts#L82).
-- **Separate upload endpoint instead of inline registration**: confirmed across [src/routes/auth.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/auth.ts#L11) and [src/routes/uploads.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/uploads.ts#L202).
-- **No DB-backed retention config**: confirmed by query-param retention cleanup in [src/routes/slots.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/routes/slots.ts#L245) and missing schema support in [prisma/schema.prisma](/home/abdullah/Projects/codestacker-2026-flowcare-backend/prisma/schema.prisma#L15).
-- **Missing audit trail coverage**: confirmed by limited audit action set and sparse usage in [src/utils/audit-logger.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/utils/audit-logger.ts#L6).
-
-## Seed / Bootstrap Assessment
-
-Current behavior:
-
-- Seed script deletes all data and recreates hard-coded sample records. See [prisma/seed.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/prisma/seed.ts#L19).
-- Default admin is created only inside the seed script. See [prisma/seed.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/prisma/seed.ts#L36).
-- No startup bootstrap/import logic exists in the app entrypoint. See [src/index.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/index.ts#L82).
-
-Assessment:
-
-- **FAIL / CRITICAL**: Not startup-driven.
-- **FAIL / CRITICAL**: Not idempotent; destructive reset deletes reviewer-created data.
-- **FAIL / CRITICAL**: Does not read the provided JSON file.
-- **PARTIAL**: A default admin can exist after running the seed, but that does not satisfy the startup requirement.
-
-## Audit Trail Assessment
-
-Implemented coverage:
-
-- Appointment create/cancel/status change
-- Slot create/update/delete/cleanup
-- Staff assignment changes
-- File access/upload events
-
-Missing or weak coverage:
-
-- Login and registration are not audited even though action types exist for them. See [src/utils/audit-logger.ts](/home/abdullah/Projects/codestacker-2026-flowcare-backend/src/utils/audit-logger.ts#L19).
-- Branch and service-type management are not audited.
-- Customer profile create/update is not audited.
-- Retention configuration changes cannot be audited because no such config exists.
-- Many audit writes omit `branchId`, undermining manager branch-only views.
-
-Assessment:
-
-- **FAIL / CRITICAL**: “Missing audit trail coverage” is valid.
-
-## Summary Table
-
-| Feature | Required | Current | Status | Priority |
-|---|---|---|---|---|
-| Authentication | Basic Auth | JWT bearer tokens | FAIL | CRITICAL |
-| Default admin | Exists at startup | Created only by manual seed | FAIL | CRITICAL |
-| Protected API contract | All non-public routes protected | Mixed, JWT-based | FAIL | CRITICAL |
-| Public branches | Public listing | `GET /api/branches` public | PARTIAL | MEDIUM |
-| Public services by branch | Explicit public service listing by branch | Generic public `GET /api/service-types?branchId=` | PARTIAL | MEDIUM |
-| Public available slots | Public branch/service/date availability | Generic public `GET /api/slots` | PARTIAL | MEDIUM |
-| Registration with ID image | Inline upload during registration | Split across register + upload endpoint | FAIL | CRITICAL |
-| Customer login contract | Required auth flow | JWT login response | FAIL | CRITICAL |
-| Customer book own appointment | Supported | Supported with gaps | PARTIAL | HIGH |
-| Customer reschedule | Required | Missing dedicated reschedule support | FAIL | HIGH |
-| Customer cancel | Required | Supported, but delete hard-removes record | PARTIAL | HIGH |
-| Staff schedule visibility | Required | Indirect via staff detail / appointments | PARTIAL | MEDIUM |
-| Staff status updates | Required | `PATCH /api/appointments/:id` | PARTIAL | MEDIUM |
-| Manager branch scoping | Required | Implemented in many routes | PARTIAL | MEDIUM |
-| Seed import source | Provided JSON file | Hard-coded objects | FAIL | CRITICAL |
-| Seed import timing | At startup | Manual script only | FAIL | CRITICAL |
-| Seed idempotency | Must be idempotent | Destructive reset | FAIL | CRITICAL |
-| Slot delete semantics | Soft delete | `deletedAt` soft delete present | PARTIAL | MEDIUM |
-| Retention config storage | DB-backed days value | Query parameter only | FAIL | CRITICAL |
-| Retention config permissions | Admin only | No config endpoint/model | FAIL | CRITICAL |
-| Cleanup idempotency | Required | Endpoint is rerunnable, but policy source is wrong | PARTIAL | HIGH |
-| Audit log coverage | Sensitive actions covered | Partial coverage only | FAIL | CRITICAL |
-| Audit log visibility | Admin all, manager branch only | Route exists, data quality weak | PARTIAL | HIGH |
-| Audit CSV export | Admin export | Implemented | PARTIAL | MEDIUM |
-| Customer ID retrieval | Admin only | File route admin-only, customer routes leak metadata | FAIL | HIGH |
-| Attachment retrieval | Permissioned + content-type | Implemented | PARTIAL | MEDIUM |
-
-## Bottom Line
-
-The repo has useful building blocks, especially around branch scoping, soft-delete scaffolding for slots, and permissioned file retrieval. It is not challenge-compliant yet because several non-negotiable contracts are implemented with forbidden substitutions: JWT for Basic Auth, manual destructive seeding for startup JSON import, separate upload endpoints for registration, query-param retention instead of DB-backed configuration, and incomplete audit coverage.
+| area | status | basis |
+|---|---|---|
+| Basic Auth contract | fail | JWT/Bearer implemented instead |
+| Default admin at startup | fail | Only created by manual seed script |
+| Public branches endpoint | pass | `GET /api/branches` is public |
+| Public services-by-branch | fail | Generic list exists, but contract is not explicit and detail route is protected |
+| Public available slots | partial | Public list exists, but filtering/availability logic is not contract-safe |
+| Inline registration with ID image | fail | Separate upload endpoint used instead |
+| Customer book/view/cancel/reschedule | partial | Book/view/cancel exist; reschedule missing; cancellation semantics wrong |
+| Branch-scoped staff/manager access | partial | Scope checks exist, but auth contract is wrong and assigned-schedule behavior is weak |
+| Slot soft delete | pass | `deletedAt` soft delete implemented |
+| DB-backed retention config | fail | No schema model or config route |
+| Idempotent cleanup | partial | Cleanup reruns safely, but uses query-param retention instead of DB config |
+| Audit view/export | partial | Routes exist, but underlying audit rows are incomplete/inconsistently scoped |
+| Customer ID retrieval admin-only | partial | Retrieval route is admin-only, but customer APIs leak ID fields |
+| Appointment attachment retrieval | partial | Permissions and content-type are implemented, but auth contract is wrong |
+| Startup JSON seed import | fail | No startup import, hard-coded destructive seed |
