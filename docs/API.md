@@ -69,8 +69,8 @@ curl -X POST http://localhost:3000/api/auth/register \
 | `GET` | `/api/appointments` | Any authenticated user | Customers see own, staff see assigned-to-me only, managers see assigned branch, admin sees all |
 | `POST` | `/api/appointments` | Customer, Staff, Branch Manager, Admin | Primary booking contract. Accepts `multipart/form-data`, reads text fields from `req.body`, and accepts optional `attachment` in `req.file` |
 | `GET` | `/api/appointments/:id` | Any authenticated user with access | Customers own only; staff assigned-only; managers branch scoped |
-| `PATCH` | `/api/appointments/:id` | Any authenticated user with access | Reschedule with `slotId`, update notes, or update status using canonical values |
-| `DELETE` | `/api/appointments/:id` | Any authenticated user with access | Cancel appointment record |
+| `PATCH` | `/api/appointments/:id` | Any authenticated user with access | Reschedule with `slotId` (not staff), update notes, or update status using canonical values (staff cannot cancel) |
+| `DELETE` | `/api/appointments/:id` | Customer, Branch Manager, Admin | Cancel appointment record (staff cannot cancel) |
 
 Book with no attachment:
 
@@ -146,6 +146,9 @@ curl -X POST http://localhost:3000/api/branches \
 | `GET` | `/api/service-types/:id` | Any authenticated user with access | Branch-scoped for managers/staff |
 | `PATCH` | `/api/service-types/:id` | Admin, Branch Manager | Branch-scoped |
 | `DELETE` | `/api/service-types/:id` | Admin, Branch Manager | Branch-scoped |
+| `GET` | `/api/service-types/:id/staff` | Admin, Branch Manager | List staff assigned to a service type at a branch; optional `branchId` filter |
+| `POST` | `/api/service-types/:id/assign-staff` | Admin, Branch Manager | Assign staff to service type `{ staffId, branchId }`; idempotent on duplicate |
+| `DELETE` | `/api/service-types/:id/assign-staff/:staffId` | Admin, Branch Manager | Remove staff from service type; optional `branchId` query param |
 
 ## Slots
 
@@ -230,15 +233,16 @@ curl -X DELETE http://localhost:3000/api/slots/SLOT_ID/assign-staff/STAFF_ID \
   -u manager.mct-001@flowcare.com:password123
 ```
 
-Staff assignment scope is slot-level only. The API stores assignments in `SlotAssignment` records tied to a concrete slot, and appointment booking validates against those slot assignments. There is no separate service-level staff assignment API.
+Staff assignment operates at two levels: **slot-level** (`SlotAssignment` records via `/api/slots/:id/assign-staff`) and **service-type-level** (`StaffServiceAssignment` records via `/api/service-types/:id/assign-staff`). Slot assignments tie a staff member to a concrete slot. Service-type assignments declare which services a staff member can handle at a given branch.
 
 ## Staff
 
 | Method | Path | Auth | Notes |
 | --- | --- | --- | --- |
-| `GET` | `/api/staff` | Admin, Branch Manager, Staff | Managers/staff branch scoped |
+| `GET` | `/api/staff/me` | Admin, Branch Manager, Staff | Staff self-lookup (own profile) |
+| `GET` | `/api/staff` | Admin, Branch Manager | Managers branch-scoped; staff cannot list directory |
 | `POST` | `/api/staff` | Admin, Branch Manager | Managers limited to own branch |
-| `GET` | `/api/staff/:id` | Admin, Branch Manager, Staff | Branch-scoped |
+| `GET` | `/api/staff/:id` | Admin, Branch Manager | Branch-scoped; staff cannot look up other staff |
 | `PATCH` | `/api/staff/:id` | Admin, Branch Manager | Branch-scoped |
 | `DELETE` | `/api/staff/:id` | Admin, Branch Manager | Branch-scoped |
 
@@ -246,9 +250,9 @@ Staff assignment scope is slot-level only. The API stores assignments in `SlotAs
 
 | Method | Path | Auth | Notes |
 | --- | --- | --- | --- |
-| `GET` | `/api/customers` | Any authenticated user | Customers see own profile; staff/managers see branch-related customers |
+| `GET` | `/api/customers` | Admin, Branch Manager | Staff cannot browse customer directory |
 | `POST` | `/api/customers` | Any authenticated user | Create customer profile |
-| `GET` | `/api/customers/:id` | Any authenticated user with access | Scoped by role |
+| `GET` | `/api/customers/:id` | Admin, Branch Manager, Customer (own) | Staff cannot look up customers |
 | `PATCH` | `/api/customers/:id` | Any authenticated user with access | Scoped by role |
 
 ## Uploads and Private Files
@@ -274,6 +278,8 @@ curl -X POST http://localhost:3000/api/uploads/appointment-attachment \
 | --- | --- | --- | --- |
 | `GET` | `/api/audit` | Admin, Branch Manager | Managers see only their branch logs |
 | `GET` | `/api/audit/export` | Admin | CSV export |
+
+Each audit record includes an `actorRole` field that snapshots the role of the user who performed the action at the time it occurred. The CSV export includes `actorRole` as a dedicated column.
 
 Audit export:
 

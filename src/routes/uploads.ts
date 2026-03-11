@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authMiddleware, roleMiddleware } from '../middleware/auth.js';
-import { logAudit, getIpAddressFromRequest } from '../utils/audit-logger.js';
+import { logAuditFromRequest } from '../utils/audit-logger.js';
 import path from 'path';
 import fs from 'fs';
 import mime from 'mime-types';
@@ -190,16 +190,15 @@ router.get('/customer-id/:customerId',
       const mimeType = mime.lookup(customer.idImageUrl) || 'application/octet-stream';
       
       // Audit log
-      await logAudit(
-        req.user?.userId,
+      await logAuditFromRequest(
+        req,
         'CUSTOMER_ID_ACCESSED',
         'Customer',
         customerId,
         {
           fileUrl: customer.idImageUrl,
           action: 'download',
-        },
-        getIpAddressFromRequest(req)
+        }
       );
       
       // Send file with correct content type
@@ -305,8 +304,8 @@ router.get('/appointment/:appointmentId/attachment',
       const mimeType = mime.lookup(appointment.attachmentUrl) || 'application/octet-stream';
       
       // Audit log
-      await logAudit(
-        req.user?.userId,
+      await logAuditFromRequest(
+        req,
         'APPOINTMENT_ATTACHMENT_ACCESSED',
         'Appointment',
         appointmentId,
@@ -315,7 +314,6 @@ router.get('/appointment/:appointmentId/attachment',
           fileUrl: appointment.attachmentUrl,
           action: 'download',
         },
-        getIpAddressFromRequest(req),
         appointment.branchId
       );
       
@@ -423,8 +421,8 @@ router.post('/appointment-attachment',
       shouldRemoveUploadedFile = false;
       
       // Audit log
-      await logAudit(
-        req.user?.userId,
+      await logAuditFromRequest(
+        req,
         'APPOINTMENT_ATTACHMENT_UPLOADED',
         'Appointment',
         appointmentId,
@@ -435,7 +433,6 @@ router.post('/appointment-attachment',
           fileSize: req.file.size,
           mimeType: req.file.mimetype,
         },
-        getIpAddressFromRequest(req),
         appointment.branchId
       );
       

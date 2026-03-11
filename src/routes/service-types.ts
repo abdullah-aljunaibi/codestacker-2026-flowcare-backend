@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authMiddleware, roleMiddleware, branchScopedMiddleware } from '../middleware/auth.js';
 import { createServiceTypeSchema, updateServiceTypeSchema } from '../types/index.js';
-import { getIpAddressFromRequest, logAudit } from '../utils/audit-logger.js';
+import { logAuditFromRequest } from '../utils/audit-logger.js';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -145,8 +145,8 @@ router.post('/', authMiddleware,
         },
       });
 
-      await logAudit(
-        req.user?.userId,
+      await logAuditFromRequest(
+        req,
         'SERVICE_TYPE_CREATED',
         'ServiceType',
         serviceType.id,
@@ -156,7 +156,6 @@ router.post('/', authMiddleware,
           name: serviceType.name,
           duration: serviceType.duration,
         },
-        getIpAddressFromRequest(req),
         data.branchId
       );
       
@@ -333,8 +332,8 @@ router.patch('/:id', authMiddleware,
         },
       });
 
-      await logAudit(
-        req.user?.userId,
+      await logAuditFromRequest(
+        req,
         'SERVICE_TYPE_UPDATED',
         'ServiceType',
         id,
@@ -342,7 +341,6 @@ router.patch('/:id', authMiddleware,
           branchId: existingServiceType.branchId,
           changes: validation.data,
         },
-        getIpAddressFromRequest(req),
         existingServiceType.branchId
       );
       
@@ -364,6 +362,304 @@ router.patch('/:id', authMiddleware,
           error: 'Internal server error',
         });
       }
+    }
+  }
+);
+
+// GET /api/service-types/:id/staff - List staff assigned to a service type
+router.get('/:id/staff', authMiddleware,
+  roleMiddleware('ADMIN', 'BRANCH_MANAGER'),
+  async (req: Request, res: Response) => {
+    try {
+      const serviceTypeId = String(req.params.id);
+
+      const serviceType = await prisma.serviceType.findUnique({
+        where: { id: serviceTypeId },
+        select: { id: true, branchId: true },
+      });
+
+      if (!serviceType) {
+        res.status(404).json({
+          success: false,
+          error: 'Service type not found',
+        });
+        return;
+      }
+
+      if (req.user?.role === 'BRANCH_MANAGER' && serviceType.branchId !== req.user.branchId) {
+        res.status(403).json({
+          success: false,
+          error: 'Access denied: Cannot view staff assignments outside your branch',
+        });
+        return;
+      }
+
+      const assignments = await prisma.staffServiceAssignment.findMany({
+        where: { serviceTypeId },
+        select: {
+          id: true,
+          createdAt: true,
+          staff: {
+            select: {
+              id: true,
+              position: true,
+              employeeId: true,
+              user: {
+                select: {
+                  id: true,
+                  email: true,
+                  firstName: true,
+                  lastName: true,
+                },
+              },
+            },
+          },
+          branch: {
+            select: {
+              id: true,
+              name: true,
+              code: true,
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      res.json({
+        success: true,
+        data: assignments,
+      });
+    } catch (error) {
+      console.error('Error listing service type staff:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Internal server error',
+      });
+    }
+  }
+);
+
+// POST /api/service-types/:id/assign-staff - Assign staff to a service type
+router.post('/:id/assign-staff', authMiddleware,
+  roleMiddleware('ADMIN', 'BRANCH_MANAGER'),
+  async (req: Request, res: Response) => {
+    try {
+      const serviceTypeId = String(req.params.id);
+      const { staffId } = req.body;
+
+      if (!staffId || typeof staffId !== 'string') {
+        res.status(400).json({
+          success: false,
+          error: 'staffId is required',
+        });
+        return;
+      }
+
+      const serviceType = await prisma.serviceType.findUnique({
+        where: { id: serviceTypeId },
+        select: { id: true, branchId: true, name: true },
+      });
+
+      if (!serviceType) {
+        res.status(404).json({
+          success: false,
+          error: 'Service type not found',
+        });
+        return;
+      }
+
+      if (req.user?.role === 'BRANCH_MANAGER' && serviceType.branchId !== req.user.branchId) {
+        res.status(403).json({
+          success: false,
+          error: 'Access denied: Cannot assign staff outside your branch',
+        });
+        return;
+      }
+
+      const staff = await prisma.staff.findUnique({
+        where: { id: staffId },
+        select: { id: true, branchId: true, user: { select: { email: true } } },
+      });
+
+      if (!staff) {
+        res.status(404).json({
+          success: false,
+          error: 'Staff member not found',
+        });
+        return;
+      }
+
+      if (staff.branchId !== serviceType.branchId) {
+        res.status(400).json({
+          success: false,
+          error: 'Staff member must belong to the same branch as the service type',
+        });
+        return;
+      }
+
+      const existing = await prisma.staffServiceAssignment.findUnique({
+        where: {
+          staffId_serviceTypeId_branchId: {
+            staffId,
+            serviceTypeId,
+            branchId: serviceType.branchId,
+          },
+        },
+      });
+
+      if (existing) {
+        res.json({
+          success: true,
+          data: existing,
+          message: 'Staff already assigned to this service type',
+        });
+        return;
+      }
+
+      const assignment = await prisma.staffServiceAssignment.create({
+        data: {
+          staffId,
+          serviceTypeId,
+          branchId: serviceType.branchId,
+        },
+        select: {
+          id: true,
+          createdAt: true,
+          staff: {
+            select: {
+              id: true,
+              position: true,
+              user: {
+                select: {
+                  email: true,
+                  firstName: true,
+                  lastName: true,
+                },
+              },
+            },
+          },
+          serviceType: {
+            select: {
+              id: true,
+              name: true,
+              code: true,
+            },
+          },
+          branch: {
+            select: {
+              id: true,
+              name: true,
+              code: true,
+            },
+          },
+        },
+      });
+
+      await logAuditFromRequest(
+        req,
+        'STAFF_SERVICE_ASSIGNED',
+        'StaffServiceAssignment',
+        assignment.id,
+        {
+          staffId,
+          serviceTypeId,
+          branchId: serviceType.branchId,
+          staffEmail: staff.user.email,
+          serviceTypeName: serviceType.name,
+        },
+        serviceType.branchId
+      );
+
+      res.status(201).json({
+        success: true,
+        data: assignment,
+        message: 'Staff assigned to service type successfully',
+      });
+    } catch (error) {
+      console.error('Error assigning staff to service type:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Internal server error',
+      });
+    }
+  }
+);
+
+// DELETE /api/service-types/:id/assign-staff/:staffId - Remove staff from a service type
+router.delete('/:id/assign-staff/:staffId', authMiddleware,
+  roleMiddleware('ADMIN', 'BRANCH_MANAGER'),
+  async (req: Request, res: Response) => {
+    try {
+      const serviceTypeId = String(req.params.id);
+      const staffId = String(req.params.staffId);
+
+      const serviceType = await prisma.serviceType.findUnique({
+        where: { id: serviceTypeId },
+        select: { id: true, branchId: true, name: true },
+      });
+
+      if (!serviceType) {
+        res.status(404).json({
+          success: false,
+          error: 'Service type not found',
+        });
+        return;
+      }
+
+      if (req.user?.role === 'BRANCH_MANAGER' && serviceType.branchId !== req.user.branchId) {
+        res.status(403).json({
+          success: false,
+          error: 'Access denied: Cannot manage staff assignments outside your branch',
+        });
+        return;
+      }
+
+      const assignment = await prisma.staffServiceAssignment.findUnique({
+        where: {
+          staffId_serviceTypeId_branchId: {
+            staffId,
+            serviceTypeId,
+            branchId: serviceType.branchId,
+          },
+        },
+      });
+
+      if (!assignment) {
+        res.status(404).json({
+          success: false,
+          error: 'Staff assignment not found',
+        });
+        return;
+      }
+
+      await prisma.staffServiceAssignment.delete({
+        where: { id: assignment.id },
+      });
+
+      await logAuditFromRequest(
+        req,
+        'STAFF_SERVICE_UNASSIGNED',
+        'StaffServiceAssignment',
+        assignment.id,
+        {
+          staffId,
+          serviceTypeId,
+          branchId: serviceType.branchId,
+          serviceTypeName: serviceType.name,
+        },
+        serviceType.branchId
+      );
+
+      res.json({
+        success: true,
+        message: 'Staff removed from service type successfully',
+      });
+    } catch (error) {
+      console.error('Error removing staff from service type:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Internal server error',
+      });
     }
   }
 );
@@ -402,15 +698,14 @@ router.delete('/:id', authMiddleware,
         where: { id },
       });
 
-      await logAudit(
-        req.user?.userId,
+      await logAuditFromRequest(
+        req,
         'SERVICE_TYPE_DELETED',
         'ServiceType',
         id,
         {
           branchId: existingServiceType.branchId,
         },
-        getIpAddressFromRequest(req),
         existingServiceType.branchId
       );
       

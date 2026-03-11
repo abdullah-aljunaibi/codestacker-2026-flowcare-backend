@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authMiddleware, roleMiddleware, branchScopedMiddleware } from '../middleware/auth.js';
 import { createStaffSchema, updateStaffSchema } from '../types/index.js';
-import { logAudit, getIpAddressFromRequest } from '../utils/audit-logger.js';
+import { logAuditFromRequest } from '../utils/audit-logger.js';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -10,12 +10,80 @@ const prisma = new PrismaClient();
 // All staff routes require authentication
 router.use(authMiddleware);
 
+// GET /api/staff/me - Staff self-lookup (own profile)
+router.get('/me',
+  roleMiddleware('ADMIN', 'BRANCH_MANAGER', 'STAFF'),
+  async (req: Request, res: Response) => {
+    try {
+      if (!req.user?.staffId) {
+        res.status(404).json({
+          success: false,
+          error: 'No staff profile found for current user',
+        });
+        return;
+      }
+
+      const staff = await prisma.staff.findUnique({
+        where: { id: req.user.staffId },
+        select: {
+          id: true,
+          user: {
+            select: {
+              id: true,
+              email: true,
+              firstName: true,
+              lastName: true,
+              phone: true,
+              role: true,
+            },
+          },
+          branch: {
+            select: {
+              id: true,
+              name: true,
+              code: true,
+            },
+          },
+          position: true,
+          employeeId: true,
+          isManager: true,
+          createdAt: true,
+          _count: {
+            select: {
+              appointments: true,
+              slotAssignments: true,
+            },
+          },
+        },
+      });
+
+      if (!staff) {
+        res.status(404).json({
+          success: false,
+          error: 'Staff profile not found',
+        });
+        return;
+      }
+
+      res.json({
+        success: true,
+        data: staff,
+      });
+    } catch (error) {
+      console.error('Error getting staff profile:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Internal server error',
+      });
+    }
+  }
+);
+
 // GET /api/staff - List staff members
 // ADMIN: all staff
 // BRANCH_MANAGER: staff in their branch
-// STAFF: can view their own branch colleagues
-router.get('/', 
-  roleMiddleware('ADMIN', 'BRANCH_MANAGER', 'STAFF'),
+router.get('/',
+  roleMiddleware('ADMIN', 'BRANCH_MANAGER'),
   branchScopedMiddleware(true),
   async (req: Request, res: Response) => {
     try {
@@ -183,8 +251,8 @@ router.post('/',
       });
       
       // Audit log: staff assigned
-      await logAudit(
-        req.user?.userId,
+      await logAuditFromRequest(
+        req,
         'STAFF_ASSIGNED',
         'Staff',
         staff.id,
@@ -194,8 +262,7 @@ router.post('/',
           position: data.position,
           isManager: data.isManager,
           userEmail: staff.user.email,
-        },
-        getIpAddressFromRequest(req)
+        }
       );
       
       res.status(201).json({
@@ -215,11 +282,11 @@ router.post('/',
 
 // GET /api/staff/:id - Get staff details
 router.get('/:id',
-  roleMiddleware('ADMIN', 'BRANCH_MANAGER', 'STAFF'),
+  roleMiddleware('ADMIN', 'BRANCH_MANAGER'),
   async (req: Request, res: Response) => {
     try {
       const id = String(req.params.id);
-      
+
       const staff = await prisma.staff.findUnique({
         where: { id },
         select: {
@@ -288,7 +355,7 @@ router.get('/:id',
           },
         },
       });
-      
+
       if (!staff) {
         res.status(404).json({
           success: false,
@@ -296,9 +363,9 @@ router.get('/:id',
         });
         return;
       }
-      
-      // Check access: ADMIN can see all, BRANCH_MANAGER/STAFF can see own branch
-      if (req.user?.role === 'BRANCH_MANAGER' || req.user?.role === 'STAFF') {
+
+      // Check access: ADMIN can see all, BRANCH_MANAGER can see own branch
+      if (req.user?.role === 'BRANCH_MANAGER') {
         if (req.user?.branchId && staff.branch.id !== req.user.branchId) {
           res.status(403).json({
             success: false,
@@ -307,7 +374,7 @@ router.get('/:id',
           return;
         }
       }
-      
+
       res.json({
         success: true,
         data: staff,
@@ -404,8 +471,8 @@ router.patch('/:id',
       const hasManagerChange = updateData.isManager !== undefined;
       
       if (hasBranchChange || hasPositionChange || hasManagerChange) {
-        await logAudit(
-          req.user?.userId,
+        await logAuditFromRequest(
+          req,
           'STAFF_ASSIGNMENT_CHANGED',
           'Staff',
           id,
@@ -415,8 +482,7 @@ router.patch('/:id',
             newBranchId: updateData.branchId || existingStaff.branchId,
             changes: updateData,
             userEmail: staff.user.email,
-          },
-          getIpAddressFromRequest(req)
+          }
         );
       }
       
@@ -484,15 +550,14 @@ router.delete('/:id',
       });
       
       // Audit log: staff unassigned
-      await logAudit(
-        req.user?.userId,
+      await logAuditFromRequest(
+        req,
         'STAFF_UNASSIGNED',
         'Staff',
         id,
         {
           branchId: existingStaff.branchId,
-        },
-        getIpAddressFromRequest(req)
+        }
       );
       
       res.json({

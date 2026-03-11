@@ -16,12 +16,13 @@
 - [x] Appointment
 - [x] AuditLog
 - [x] SlotAssignment (supporting entity)
+- [x] StaffServiceAssignment (staff-to-service/branch assignment)
 
 ### Roles & RBAC ✅
 
 - [x] Admin (system-wide access)
 - [x] Branch Manager (branch-scoped)
-- [x] Staff (branch-scoped, own schedule)
+- [x] Staff (branch-scoped, own schedule; cannot cancel/reschedule appointments; cannot browse staff or customer directories)
 - [x] Customer (own data)
 
 ### Public APIs ✅
@@ -84,7 +85,9 @@
 - [x] Slot creation/update/delete
 - [x] Hard delete actions
 - [x] CSV export
-- [x] Each log includes: action, actor, entity, entityId, timestamp, metadata
+- [x] Each log includes: action, actor, entity, entityId, timestamp, metadata, actorRole
+- [x] `actorRole` snapshots the actor's role at the time of the event
+- [x] CSV export includes `actorRole` column
 
 ### Technical Requirements ✅
 
@@ -111,4 +114,13 @@
 - Queue placeholders are quarantined from the mounted API surface and do not appear in the judged API docs.
 - Working curl examples are maintained in `README.md` and `docs/API.md`.
 
-## Date: 2026-03-10
+### Staff-Service Assignments ✅
+
+- [x] `StaffServiceAssignment` model with unique constraint on (staffId, serviceTypeId, branchId)
+- [x] `GET /api/service-types/:id/staff` lists assigned staff
+- [x] `POST /api/service-types/:id/assign-staff` assigns staff (idempotent on duplicate)
+- [x] `DELETE /api/service-types/:id/assign-staff/:staffId` removes assignment
+- [x] Validates staff belongs to same branch as service type
+- [x] Branch manager branch-scoped
+
+## Date: 2026-03-11

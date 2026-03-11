@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authMiddleware, roleMiddleware, branchScopedMiddleware } from '../middleware/auth.js';
 import { createBranchSchema, updateBranchSchema } from '../types/index.js';
-import { getIpAddressFromRequest, logAudit } from '../utils/audit-logger.js';
+import { logAuditFromRequest } from '../utils/audit-logger.js';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -119,8 +119,8 @@ router.post('/', authMiddleware, roleMiddleware('ADMIN'), async (req: Request, r
       },
     });
 
-    await logAudit(
-      req.user?.userId,
+    await logAuditFromRequest(
+      req,
       'BRANCH_CREATED',
       'Branch',
       branch.id,
@@ -129,7 +129,6 @@ router.post('/', authMiddleware, roleMiddleware('ADMIN'), async (req: Request, r
         code: branch.code,
         name: branch.name,
       },
-      getIpAddressFromRequest(req),
       branch.id
     );
     
@@ -276,8 +275,8 @@ router.patch('/:id', authMiddleware,
         },
       });
 
-      await logAudit(
-        req.user?.userId,
+      await logAuditFromRequest(
+        req,
         'BRANCH_UPDATED',
         'Branch',
         id,
@@ -285,7 +284,6 @@ router.patch('/:id', authMiddleware,
           branchId: id,
           changes: validation.data,
         },
-        getIpAddressFromRequest(req),
         id
       );
       
@@ -333,8 +331,8 @@ router.delete('/:id', authMiddleware, roleMiddleware('ADMIN'), async (req: Reque
       where: { id },
     });
 
-    await logAudit(
-      req.user?.userId,
+    await logAuditFromRequest(
+      req,
       'BRANCH_DELETED',
       'Branch',
       id,
@@ -343,7 +341,6 @@ router.delete('/:id', authMiddleware, roleMiddleware('ADMIN'), async (req: Reque
         code: branch.code,
         name: branch.name,
       },
-      getIpAddressFromRequest(req),
       id
     );
     

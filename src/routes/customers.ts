@@ -20,6 +20,14 @@ router.get('/', async (req: Request, res: Response) => {
     let whereClause: any = {};
     
     // Role-based filtering
+    if (req.user?.role === 'STAFF') {
+      res.status(403).json({
+        success: false,
+        error: 'Insufficient permissions',
+      });
+      return;
+    }
+
     if (req.user?.role === 'CUSTOMER') {
       // CUSTOMER can only view their own profile
       if (!req.user?.customerId) {
@@ -30,8 +38,8 @@ router.get('/', async (req: Request, res: Response) => {
         return;
       }
       whereClause.id = req.user.customerId;
-    } else if (req.user?.role === 'BRANCH_MANAGER' || req.user?.role === 'STAFF') {
-      // BRANCH_MANAGER/STAFF can view customers who have appointments at their branch
+    } else if (req.user?.role === 'BRANCH_MANAGER') {
+      // BRANCH_MANAGER can view customers who have appointments at their branch
       if (req.user?.branchId) {
         whereClause.appointments = {
           some: {
@@ -283,6 +291,14 @@ router.get('/:id', async (req: Request, res: Response) => {
     }
     
     // Check access permissions
+    if (req.user?.role === 'STAFF') {
+      res.status(403).json({
+        success: false,
+        error: 'Insufficient permissions',
+      });
+      return;
+    }
+
     if (req.user?.role === 'CUSTOMER') {
       // CUSTOMER can only view their own profile
       if (!req.user?.customerId || customer.id !== req.user.customerId) {
@@ -292,8 +308,8 @@ router.get('/:id', async (req: Request, res: Response) => {
         });
         return;
       }
-    } else if (req.user?.role === 'BRANCH_MANAGER' || req.user?.role === 'STAFF') {
-      // BRANCH_MANAGER/STAFF can only view customers with appointments at their branch
+    } else if (req.user?.role === 'BRANCH_MANAGER') {
+      // BRANCH_MANAGER can only view customers with appointments at their branch
       if (req.user?.branchId) {
         const hasAppointmentAtBranch = await prisma.appointment.findFirst({
           where: {
@@ -301,7 +317,7 @@ router.get('/:id', async (req: Request, res: Response) => {
             branchId: req.user.branchId,
           },
         });
-        
+
         if (!hasAppointmentAtBranch) {
           res.status(403).json({
             success: false,

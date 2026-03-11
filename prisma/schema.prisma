@@ -72,9 +72,10 @@ model Staff {
   updatedAt   DateTime @updatedAt
   
   // Relations
-  appointments    Appointment[]  // Appointments handled by this staff
-  slotAssignments SlotAssignment[]
-  
+  appointments          Appointment[]  // Appointments handled by this staff
+  slotAssignments       SlotAssignment[]
+  serviceAssignments    StaffServiceAssignment[]
+
   @@index([branchId])
   @@index([userId])
   @@index([isManager])
@@ -95,12 +96,13 @@ model Branch {
   updatedAt   DateTime @updatedAt
   
   // Relations
-  staff         Staff[]
-  serviceTypes  ServiceType[]
-  slots         Slot[]
-  appointments  Appointment[]
-  retentionConfig RetentionConfig?
-  
+  staff              Staff[]
+  serviceTypes       ServiceType[]
+  slots              Slot[]
+  appointments       Appointment[]
+  retentionConfig    RetentionConfig?
+  staffServiceAssignments StaffServiceAssignment[]
+
   @@index([code])
   @@index([isActive])
 }
@@ -128,15 +130,33 @@ model ServiceType {
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-  
+
   // Relations
-  slots Slot[]
-  
+  slots              Slot[]
+  staffAssignments   StaffServiceAssignment[]
+
   @@index([branchId])
   @@index([code])
   @@index([isActive])
-  
+
   @@unique([branchId, code])
+}
+
+// Explicit staff-to-service/branch assignment
+model StaffServiceAssignment {
+  id            String      @id @default(cuid())
+  staffId       String
+  staff         Staff       @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  serviceTypeId String
+  serviceType   ServiceType @relation(fields: [serviceTypeId], references: [id], onDelete: Cascade)
+  branchId      String
+  branch        Branch      @relation(fields: [branchId], references: [id])
+  createdAt     DateTime    @default(now())
+
+  @@unique([staffId, serviceTypeId, branchId])
+  @@index([staffId])
+  @@index([serviceTypeId])
+  @@index([branchId])
 }
 
 // Time slot for appointments
@@ -230,10 +250,11 @@ model AuditLog {
   entity    String?  // e.g., "Appointment", "User"
   entityId  String?  // ID of the affected entity
   branchId  String?  // Branch context for visibility filtering (Phase 4)
+  actorRole String?  // Snapshot of actor's role at time of action
   metadata  Json?    // Additional context
   ipAddress String?
   createdAt DateTime @default(now())
-  
+
   @@index([userId])
   @@index([action])
   @@index([entity])

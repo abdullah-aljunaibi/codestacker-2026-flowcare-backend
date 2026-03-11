@@ -6,7 +6,7 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 import { authMiddleware } from '../middleware/auth.js';
 import { createAppointmentSchema, updateAppointmentSchema } from '../types/index.js';
-import { getIpAddressFromRequest, logAudit } from '../utils/audit-logger.js';
+import { logAuditFromRequest } from '../utils/audit-logger.js';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -559,8 +559,8 @@ router.post('/', async (req: Request, res: Response) => {
     });
     shouldRemoveUploadedFile = false;
 
-    await logAudit(
-      req.user?.userId,
+    await logAuditFromRequest(
+      req,
       'APPOINTMENT_CREATED',
       'Appointment',
       appointment.id,
@@ -572,8 +572,7 @@ router.post('/', async (req: Request, res: Response) => {
         serviceTypeId: appointment.serviceTypeId,
         status: publicStatus(appointment.status),
         attachmentUrl: appointment.attachmentUrl,
-      },
-      getIpAddressFromRequest(req)
+      }
     );
 
     res.status(201).json({
@@ -645,6 +644,10 @@ router.patch('/:id', async (req: Request, res: Response) => {
     }
 
     if (isReschedule) {
+      if (req.user?.role === 'STAFF') {
+        throw new ApiError(403, 'Staff cannot reschedule appointments');
+      }
+
       assertAppointmentReadAccess(req, appointment);
 
       if (
@@ -744,8 +747,8 @@ router.patch('/:id', async (req: Request, res: Response) => {
         return updatedAppointment;
       });
 
-      await logAudit(
-        req.user?.userId,
+      await logAuditFromRequest(
+        req,
         'APPOINTMENT_RESCHEDULED',
         'Appointment',
         appointment.id,
@@ -756,8 +759,7 @@ router.patch('/:id', async (req: Request, res: Response) => {
           newSlotId: rescheduledAppointment.slotId,
           previousStaffId: appointment.staffId,
           newStaffId: rescheduledAppointment.staffId,
-        },
-        getIpAddressFromRequest(req)
+        }
       );
 
       res.json({
@@ -771,6 +773,10 @@ router.patch('/:id', async (req: Request, res: Response) => {
     if (isStatusChange) {
       assertAppointmentStatusAccess(req, appointment);
       assertValidStatusTransition(appointment.status, requestedStatus!);
+
+      if (req.user?.role === 'STAFF' && requestedStatus === 'CANCELLED') {
+        throw new ApiError(403, 'Staff cannot cancel appointments');
+      }
     } else {
       assertAppointmentReadAccess(req, appointment);
     }
@@ -852,8 +858,8 @@ router.patch('/:id', async (req: Request, res: Response) => {
     });
 
     if (requestedStatus && requestedStatus !== appointment.status) {
-      await logAudit(
-        req.user?.userId,
+      await logAuditFromRequest(
+        req,
         requestedStatus === 'CANCELLED' ? 'APPOINTMENT_CANCELLED' : 'APPOINTMENT_STATUS_CHANGED',
         'Appointment',
         appointment.id,
@@ -863,8 +869,7 @@ router.patch('/:id', async (req: Request, res: Response) => {
           newStatus: publicStatus(updatedAppointment.status),
           staffId: updatedAppointment.staffId,
           cancelReason: updatedAppointment.cancelReason,
-        },
-        getIpAddressFromRequest(req)
+        }
       );
     }
 
@@ -886,6 +891,11 @@ router.patch('/:id', async (req: Request, res: Response) => {
 
 router.delete('/:id', async (req: Request, res: Response) => {
   try {
+    if (req.user?.role === 'STAFF') {
+      sendError(res, 403, 'Staff cannot cancel appointments');
+      return;
+    }
+
     const appointment = await getAppointmentOrThrow(String(req.params.id));
     assertAppointmentCancellationAccess(req, appointment);
 
@@ -917,8 +927,8 @@ router.delete('/:id', async (req: Request, res: Response) => {
     });
 
     if (appointment.status !== 'CANCELLED') {
-      await logAudit(
-        req.user?.userId,
+      await logAuditFromRequest(
+        req,
         'APPOINTMENT_CANCELLED',
         'Appointment',
         appointment.id,
@@ -927,8 +937,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
           previousStatus: publicStatus(appointment.status),
           newStatus: publicStatus(cancelledAppointment.status),
           slotId: cancelledAppointment.slotId,
-        },
-        getIpAddressFromRequest(req)
+        }
       );
     }
 

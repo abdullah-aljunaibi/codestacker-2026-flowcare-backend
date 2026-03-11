@@ -5,6 +5,7 @@ import { authenticateBasicCredentials, parseBasicAuthHeader } from '../middlewar
 import upload, { handleMulterError } from '../middleware/upload.js';
 import { registerSchema } from '../types/index.js';
 import { getIpAddressFromRequest, logAudit } from '../utils/audit-logger.js';
+// auth.ts uses logAudit directly because login endpoints may not have req.user
 import fs from 'fs';
 
 const router = Router();
@@ -100,7 +101,9 @@ router.post('/register', upload.single('idImage'), handleMulterError, async (req
         userEmail: user.email,
         customerId: customer.id,
       },
-      getIpAddressFromRequest(req)
+      getIpAddressFromRequest(req),
+      undefined,
+      'CUSTOMER'
     );
 
     res.status(201).json({
@@ -186,7 +189,8 @@ router.post('/login', async (req: Request, res: Response) => {
       branchId: authenticatedUser.branchId,
     },
     ipAddress,
-    authenticatedUser.branchId
+    authenticatedUser.branchId,
+    authenticatedUser.role
   );
 
   res.json({

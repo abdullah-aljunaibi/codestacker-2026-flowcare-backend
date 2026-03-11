@@ -166,6 +166,17 @@ Appointment visibility rules:
 - Staff sees only appointments where `appointment.staffId === req.user.staffId`
 - Customer sees only their own appointments
 
+Appointment action restrictions:
+
+- Staff **cannot** cancel or reschedule appointments (only customers, branch managers, and admins can)
+- Staff **can** update workflow status (checked-in, in-progress, completed, no-show)
+
+Staff directory access:
+
+- Staff **cannot** browse the staff directory (`GET /api/staff`) or look up other staff (`GET /api/staff/:id`)
+- Staff can view their own profile via `GET /api/staff/me`
+- Staff **cannot** browse the customer directory (`GET /api/customers` and `GET /api/customers/:id`)
+
 Appointment status output uses canonical values: `scheduled`, `checked-in`, `in-progress`, `completed`, `cancelled`, and `no-show`. Legacy aliases such as `WAITING`, `SERVING`, and `DONE` are still accepted on input only.
 
 Slot booking semantics are one slot, one booking. A second active appointment on the same slot is rejected even if legacy rows in the database still have `capacity > 1`.
@@ -233,6 +244,29 @@ curl -X DELETE http://localhost:3000/api/slots/SLOT_ID/assign-staff/STAFF_ID \
   -u manager.mct-001@flowcare.com:password123
 ```
 
+Assign staff to a service type:
+
+```bash
+curl -X POST http://localhost:3000/api/service-types/SERVICE_TYPE_ID/assign-staff \
+  -u admin@flowcare.com:admin123 \
+  -H "Content-Type: application/json" \
+  -d '{"staffId":"STAFF_ID","branchId":"BRANCH_ID"}'
+```
+
+List staff assigned to a service type:
+
+```bash
+curl -u admin@flowcare.com:admin123 \
+  http://localhost:3000/api/service-types/SERVICE_TYPE_ID/staff
+```
+
+Remove staff from a service type:
+
+```bash
+curl -X DELETE http://localhost:3000/api/service-types/SERVICE_TYPE_ID/assign-staff/STAFF_ID \
+  -u admin@flowcare.com:admin123
+```
+
 Export audit logs:
 
 ```bash
@@ -270,7 +304,7 @@ All JSON errors use this shape:
 - `prisma/schema.prisma`: relational schema
 - `prisma/migrations/*`: deployable SQL migrations when present in the repository snapshot
 
-Staff assignment is slot-level only. A `SlotAssignment` links a staff member to one concrete slot; service types do not have separate assignment records.
+Staff assignment operates at two levels: **slot-level** (`SlotAssignment` via `/api/slots/:id/assign-staff`) and **service-type-level** (`StaffServiceAssignment` via `/api/service-types/:id/assign-staff`). Slot assignments tie a staff member to one concrete slot. Service-type assignments declare which services a staff member can handle at a given branch.
 
 ## Verification
 

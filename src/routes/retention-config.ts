@@ -2,7 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { Request, Response, Router } from 'express';
 import { authMiddleware, roleMiddleware } from '../middleware/auth.js';
 import { updateRetentionConfigSchema } from '../types/index.js';
-import { getIpAddressFromRequest, logAudit } from '../utils/audit-logger.js';
+import { logAuditFromRequest } from '../utils/audit-logger.js';
 import { getEffectiveRetentionConfigs } from '../utils/retention-config.js';
 
 const router = Router();
@@ -26,15 +26,14 @@ router.get('/', async (req: Request, res: Response) => {
       return;
     }
 
-    await logAudit(
-      req.user?.userId,
+    await logAuditFromRequest(
+      req,
       'RETENTION_CONFIG_VIEWED',
       'RetentionConfig',
       branchId,
       {
         branchId,
       },
-      getIpAddressFromRequest(req),
       branchId ?? null
     );
 
@@ -97,8 +96,8 @@ router.put('/', async (req: Request, res: Response) => {
       },
     });
 
-    await logAudit(
-      req.user?.userId,
+    await logAuditFromRequest(
+      req,
       'RETENTION_CONFIG_UPDATED',
       'RetentionConfig',
       retentionConfig.id,
@@ -108,7 +107,6 @@ router.put('/', async (req: Request, res: Response) => {
         branchCode: branch.code,
         branchName: branch.name,
       },
-      getIpAddressFromRequest(req),
       branchId
     );
 

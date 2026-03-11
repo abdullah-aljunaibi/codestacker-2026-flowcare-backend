@@ -34,7 +34,9 @@ export type AuditAction =
   | 'DATA_CLEANUP'
   | 'RETENTION_CLEANUP'
   | 'RETENTION_CONFIG_VIEWED'
-  | 'RETENTION_CONFIG_UPDATED';
+  | 'RETENTION_CONFIG_UPDATED'
+  | 'STAFF_SERVICE_ASSIGNED'
+  | 'STAFF_SERVICE_UNASSIGNED';
 
 export interface AuditMetadata {
   [key: string]: any;
@@ -50,10 +52,11 @@ export async function logAudit(
   entityId?: string,
   metadata?: AuditMetadata,
   ipAddress?: string,
-  branchId?: string | null
+  branchId?: string | null,
+  actorRole?: string | null
 ): Promise<void> {
   try {
-    await createAuditLog(prisma, userId, action, entity, entityId, metadata, ipAddress, branchId);
+    await createAuditLog(prisma, userId, action, entity, entityId, metadata, ipAddress, branchId, actorRole);
   } catch (error) {
     // Don't fail the main operation if audit logging fails
     console.error('Audit logging failed:', error);
@@ -68,11 +71,16 @@ export async function createAuditLog(
   entityId?: string,
   metadata?: AuditMetadata,
   ipAddress?: string,
-  branchId?: string | null
+  branchId?: string | null,
+  actorRole?: string | null
 ): Promise<void> {
   const derivedBranchId =
     branchId ??
     (typeof metadata?.branchId === 'string' && metadata.branchId.length > 0 ? metadata.branchId : null);
+
+  const derivedActorRole =
+    actorRole ??
+    (typeof metadata?.actorRole === 'string' && metadata.actorRole.length > 0 ? metadata.actorRole : null);
 
   await client.auditLog.create({
     data: {
@@ -81,10 +89,34 @@ export async function createAuditLog(
       entity: entity || null,
       entityId: entityId || null,
       branchId: derivedBranchId,
+      actorRole: derivedActorRole,
       metadata: metadata || null,
       ipAddress: ipAddress || null,
     },
   });
+}
+
+/**
+ * Log an audit entry from a request context (auto-captures actorRole)
+ */
+export async function logAuditFromRequest(
+  req: Request,
+  action: AuditAction,
+  entity?: string,
+  entityId?: string,
+  metadata?: AuditMetadata,
+  branchId?: string | null
+): Promise<void> {
+  return logAudit(
+    req.user?.userId,
+    action,
+    entity,
+    entityId,
+    { ...metadata, actorRole: req.user?.role },
+    getIpAddressFromRequest(req),
+    branchId,
+    req.user?.role
+  );
 }
 
 /**

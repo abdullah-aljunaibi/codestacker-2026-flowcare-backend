@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { authMiddleware, roleMiddleware, branchScopedMiddleware } from '../middleware/auth.js';
 import { assignStaffToSlotSchema, createSlotBulkSchema, createSlotSchema, updateSlotSchema } from '../types/index.js';
-import { createAuditLog, logAudit, getIpAddressFromRequest } from '../utils/audit-logger.js';
+import { createAuditLog, logAuditFromRequest, getIpAddressFromRequest } from '../utils/audit-logger.js';
 import { getEffectiveRetentionConfigs } from '../utils/retention-config.js';
 
 const router = Router();
@@ -196,8 +196,8 @@ async function createSlots(req: Request, res: Response, payload: SlotCreatePaylo
       },
     });
 
-    await logAudit(
-      req.user?.userId,
+    await logAuditFromRequest(
+      req,
       'SLOT_CREATED',
       'Slot',
       slot.id,
@@ -207,8 +207,7 @@ async function createSlots(req: Request, res: Response, payload: SlotCreatePaylo
         startTime: validation.startTime.toISOString(),
         endTime: validation.endTime.toISOString(),
         capacity: SLOT_BOOKING_LIMIT,
-      },
-      getIpAddressFromRequest(req)
+      }
     );
 
     createdSlots.push(slot);
@@ -484,7 +483,8 @@ router.post('/cleanup-retention', authMiddleware,
                 assignmentCount: slot._count.assignments,
               },
               ipAddress,
-              slot.branchId
+              slot.branchId,
+              req.user?.role
             );
 
             await tx.slot.delete({
@@ -519,7 +519,9 @@ router.post('/cleanup-retention', authMiddleware,
               retentionDays: config.retentionDays,
             })),
           },
-          ipAddress
+          ipAddress,
+          undefined,
+          req.user?.role
         );
 
         return {
@@ -758,8 +760,8 @@ router.post('/:id/assign-staff', authMiddleware,
         },
       });
 
-      await logAudit(
-        req.user?.userId,
+      await logAuditFromRequest(
+        req,
         'STAFF_ASSIGNED',
         'SlotAssignment',
         assignment.id,
@@ -771,8 +773,7 @@ router.post('/:id/assign-staff', authMiddleware,
           staffUserId: staff.user.id,
           staffEmail: staff.user.email,
           assignmentScope: 'slot',
-        },
-        getIpAddressFromRequest(req)
+        }
       );
 
       res.status(201).json({
@@ -886,8 +887,8 @@ router.delete('/:id/assign-staff/:staffId', authMiddleware,
         },
       });
 
-      await logAudit(
-        req.user?.userId,
+      await logAuditFromRequest(
+        req,
         'STAFF_UNASSIGNED',
         'SlotAssignment',
         existingAssignment.id,
@@ -899,8 +900,7 @@ router.delete('/:id/assign-staff/:staffId', authMiddleware,
           staffUserId: existingAssignment.staff.user.id,
           staffEmail: existingAssignment.staff.user.email,
           assignmentScope: 'slot',
-        },
-        getIpAddressFromRequest(req)
+        }
       );
 
       res.json({
@@ -1214,8 +1214,8 @@ router.patch('/:id', authMiddleware,
       });
       
       // Audit log: slot updated
-      await logAudit(
-        req.user?.userId,
+      await logAuditFromRequest(
+        req,
         'SLOT_UPDATED',
         'Slot',
         id,
@@ -1223,8 +1223,7 @@ router.patch('/:id', authMiddleware,
           branchId: existingSlot.branchId,
           changes: updateData,
           previousCapacity: existingSlot.capacity,
-        },
-        getIpAddressFromRequest(req)
+        }
       );
       
       res.json({
@@ -1320,8 +1319,8 @@ router.delete('/:id', authMiddleware,
       });
       
       // Audit log: slot deleted (soft delete)
-      await logAudit(
-        req.user?.userId,
+      await logAuditFromRequest(
+        req,
         'SLOT_DELETED',
         'Slot',
         id,
@@ -1329,8 +1328,7 @@ router.delete('/:id', authMiddleware,
           branchId: existingSlot.branchId,
           bookedCount: existingSlot.bookedCount,
           softDelete: true,
-        },
-        getIpAddressFromRequest(req)
+        }
       );
       
       res.json({
@@ -1415,16 +1413,15 @@ router.post('/:id/restore', authMiddleware,
       });
       
       // Audit log: slot restored
-      await logAudit(
-        req.user?.userId,
+      await logAuditFromRequest(
+        req,
         'SLOT_RESTORED',
         'Slot',
         id,
         {
           branchId: existingSlot.branchId,
           restoredAt: new Date().toISOString(),
-        },
-        getIpAddressFromRequest(req)
+        }
       );
       
       res.json({
