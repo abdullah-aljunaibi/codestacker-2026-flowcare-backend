@@ -372,6 +372,14 @@ router.patch('/:id',
       }
       
       // Check access permissions
+      if (req.user?.role === 'STAFF') {
+        res.status(403).json({
+          success: false,
+          error: 'Insufficient permissions: Staff cannot update customer profiles',
+        });
+        return;
+      }
+
       if (req.user?.role === 'CUSTOMER') {
         // CUSTOMER can only update their own profile
         if (!req.user?.customerId || existingCustomer.userId !== req.user.userId) {
@@ -382,7 +390,7 @@ router.patch('/:id',
           return;
         }
       }
-      // ADMIN/BRANCH_MANAGER/STAFF can update any customer profile
+      // ADMIN/BRANCH_MANAGER can update any customer profile
       
       const updateData = validation.data;
       
