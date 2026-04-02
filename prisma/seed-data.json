@@ -1,7 +1,7 @@
 {
   "defaultAdmin": {
     "email": "admin@flowcare.com",
-    "password": "admin123",
+    "password": "CHANGE_ME_BEFORE_DEPLOY",
     "firstName": "System",
     "lastName": "Administrator",
     "phone": "+96890000000"
@@ -160,7 +160,9 @@
       "startTime": "09:00",
       "endTime": "09:30",
       "capacity": 1,
-      "assignedStaffEmails": ["manager.mct-001@flowcare.com"]
+      "assignedStaffEmails": [
+        "manager.mct-001@flowcare.com"
+      ]
     },
     {
       "branchCode": "MCT-001",
@@ -169,7 +171,9 @@
       "startTime": "10:00",
       "endTime": "10:30",
       "capacity": 1,
-      "assignedStaffEmails": ["staff1.mct-001@flowcare.com"]
+      "assignedStaffEmails": [
+        "staff1.mct-001@flowcare.com"
+      ]
     },
     {
       "branchCode": "MCT-001",
@@ -178,7 +182,9 @@
       "startTime": "11:00",
       "endTime": "11:30",
       "capacity": 1,
-      "assignedStaffEmails": ["staff2.mct-001@flowcare.com"]
+      "assignedStaffEmails": [
+        "staff2.mct-001@flowcare.com"
+      ]
     },
     {
       "branchCode": "MCT-001",
@@ -187,7 +193,10 @@
       "startTime": "12:00",
       "endTime": "12:30",
       "capacity": 2,
-      "assignedStaffEmails": ["staff1.mct-001@flowcare.com", "staff2.mct-001@flowcare.com"]
+      "assignedStaffEmails": [
+        "staff1.mct-001@flowcare.com",
+        "staff2.mct-001@flowcare.com"
+      ]
     },
     {
       "branchCode": "MCT-001",
@@ -196,7 +205,9 @@
       "startTime": "09:00",
       "endTime": "09:30",
       "capacity": 1,
-      "assignedStaffEmails": ["manager.mct-001@flowcare.com"]
+      "assignedStaffEmails": [
+        "manager.mct-001@flowcare.com"
+      ]
     },
     {
       "branchCode": "MCT-001",
@@ -205,7 +216,9 @@
       "startTime": "10:00",
       "endTime": "10:30",
       "capacity": 1,
-      "assignedStaffEmails": ["staff1.mct-001@flowcare.com"]
+      "assignedStaffEmails": [
+        "staff1.mct-001@flowcare.com"
+      ]
     },
     {
       "branchCode": "MCT-001",
@@ -214,7 +227,9 @@
       "startTime": "11:00",
       "endTime": "11:30",
       "capacity": 2,
-      "assignedStaffEmails": ["staff2.mct-001@flowcare.com"]
+      "assignedStaffEmails": [
+        "staff2.mct-001@flowcare.com"
+      ]
     },
     {
       "branchCode": "MCT-001",
@@ -223,7 +238,9 @@
       "startTime": "09:00",
       "endTime": "09:30",
       "capacity": 1,
-      "assignedStaffEmails": ["staff1.mct-001@flowcare.com"]
+      "assignedStaffEmails": [
+        "staff1.mct-001@flowcare.com"
+      ]
     },
     {
       "branchCode": "MCT-001",
@@ -232,7 +249,9 @@
       "startTime": "10:00",
       "endTime": "10:30",
       "capacity": 1,
-      "assignedStaffEmails": ["manager.mct-001@flowcare.com"]
+      "assignedStaffEmails": [
+        "manager.mct-001@flowcare.com"
+      ]
     },
     {
       "branchCode": "MCT-001",
@@ -241,7 +260,9 @@
       "startTime": "11:00",
       "endTime": "11:30",
       "capacity": 2,
-      "assignedStaffEmails": ["staff2.mct-001@flowcare.com"]
+      "assignedStaffEmails": [
+        "staff2.mct-001@flowcare.com"
+      ]
     },
     {
       "branchCode": "SLL-001",
@@ -250,7 +271,9 @@
       "startTime": "09:00",
       "endTime": "09:30",
       "capacity": 1,
-      "assignedStaffEmails": ["manager.sll-001@flowcare.com"]
+      "assignedStaffEmails": [
+        "manager.sll-001@flowcare.com"
+      ]
     },
     {
       "branchCode": "SLL-001",
@@ -259,7 +282,9 @@
       "startTime": "10:00",
       "endTime": "10:30",
       "capacity": 1,
-      "assignedStaffEmails": ["staff1.sll-001@flowcare.com"]
+      "assignedStaffEmails": [
+        "staff1.sll-001@flowcare.com"
+      ]
     },
     {
       "branchCode": "SLL-001",
@@ -268,7 +293,9 @@
       "startTime": "11:00",
       "endTime": "11:30",
       "capacity": 1,
-      "assignedStaffEmails": ["staff2.sll-001@flowcare.com"]
+      "assignedStaffEmails": [
+        "staff2.sll-001@flowcare.com"
+      ]
     },
     {
       "branchCode": "SLL-001",
@@ -277,7 +304,10 @@
       "startTime": "12:00",
       "endTime": "12:30",
       "capacity": 2,
-      "assignedStaffEmails": ["staff1.sll-001@flowcare.com", "staff2.sll-001@flowcare.com"]
+      "assignedStaffEmails": [
+        "staff1.sll-001@flowcare.com",
+        "staff2.sll-001@flowcare.com"
+      ]
     },
     {
       "branchCode": "SLL-001",
@@ -286,7 +316,9 @@
       "startTime": "09:00",
       "endTime": "09:30",
       "capacity": 1,
-      "assignedStaffEmails": ["manager.sll-001@flowcare.com"]
+      "assignedStaffEmails": [
+        "manager.sll-001@flowcare.com"
+      ]
     },
     {
       "branchCode": "SLL-001",
@@ -295,7 +327,9 @@
       "startTime": "10:00",
       "endTime": "10:30",
       "capacity": 1,
-      "assignedStaffEmails": ["staff1.sll-001@flowcare.com"]
+      "assignedStaffEmails": [
+        "staff1.sll-001@flowcare.com"
+      ]
     },
     {
       "branchCode": "SLL-001",
@@ -304,7 +338,9 @@
       "startTime": "11:00",
       "endTime": "11:30",
       "capacity": 2,
-      "assignedStaffEmails": ["staff2.sll-001@flowcare.com"]
+      "assignedStaffEmails": [
+        "staff2.sll-001@flowcare.com"
+      ]
     },
     {
       "branchCode": "SLL-001",
@@ -313,7 +349,9 @@
       "startTime": "09:00",
       "endTime": "09:30",
       "capacity": 1,
-      "assignedStaffEmails": ["staff1.sll-001@flowcare.com"]
+      "assignedStaffEmails": [
+        "staff1.sll-001@flowcare.com"
+      ]
     },
     {
       "branchCode": "SLL-001",
@@ -322,7 +360,9 @@
       "startTime": "10:00",
       "endTime": "10:30",
       "capacity": 1,
-      "assignedStaffEmails": ["manager.sll-001@flowcare.com"]
+      "assignedStaffEmails": [
+        "manager.sll-001@flowcare.com"
+      ]
     },
     {
       "branchCode": "SLL-001",
@@ -331,7 +371,9 @@
       "startTime": "11:00",
       "endTime": "11:30",
       "capacity": 2,
-      "assignedStaffEmails": ["staff2.sll-001@flowcare.com"]
+      "assignedStaffEmails": [
+        "staff2.sll-001@flowcare.com"
+      ]
     }
   ]
 }

@@ -5,7 +5,7 @@ Base URL: `http://localhost:3000`
 Protected routes use HTTP Basic Authentication:
 
 ```bash
-curl -u admin@flowcare.com:admin123 http://localhost:3000/api/audit
+curl -u admin@flowcare.com:YOUR_ADMIN_PASSWORD http://localhost:3000/api/audit
 ```
 
 Appointment statuses exposed by the API are `scheduled`, `checked-in`, `in-progress`, `completed`, `cancelled`, and `no-show`. Legacy aliases such as `WAITING`, `SERVING`, and `DONE` are still accepted on input, but serializer output always uses the canonical values.
@@ -45,7 +45,7 @@ Error JSON responses:
 Example login:
 
 ```bash
-curl -X POST -u admin@flowcare.com:admin123 http://localhost:3000/api/auth/login
+curl -X POST -u admin@flowcare.com:YOUR_ADMIN_PASSWORD http://localhost:3000/api/auth/login
 ```
 
 Example registration:
@@ -132,7 +132,7 @@ Create branch:
 
 ```bash
 curl -X POST http://localhost:3000/api/branches \
-  -u admin@flowcare.com:admin123 \
+  -u admin@flowcare.com:YOUR_ADMIN_PASSWORD \
   -H "Content-Type: application/json" \
   -d '{"name":"Sohar Branch","code":"SHR-001","city":"Sohar","timezone":"Asia/Muscat"}'
 ```
@@ -178,7 +178,7 @@ Create one slot:
 
 ```bash
 curl -X POST http://localhost:3000/api/slots \
-  -u admin@flowcare.com:admin123 \
+  -u admin@flowcare.com:YOUR_ADMIN_PASSWORD \
   -H "Content-Type: application/json" \
   -d '{"branchId":"BRANCH_ID","serviceTypeId":"SERVICE_TYPE_ID","startTime":"2026-03-10T09:00:00.000Z","endTime":"2026-03-10T09:15:00.000Z","capacity":1}'
 ```
@@ -187,7 +187,7 @@ Create multiple slots with `POST /api/slots/bulk`:
 
 ```bash
 curl -X POST http://localhost:3000/api/slots/bulk \
-  -u admin@flowcare.com:admin123 \
+  -u admin@flowcare.com:YOUR_ADMIN_PASSWORD \
   -H "Content-Type: application/json" \
   -d '[{"branchId":"BRANCH_ID","serviceTypeId":"SERVICE_TYPE_ID","startTime":"2026-03-10T09:00:00.000Z","endTime":"2026-03-10T09:15:00.000Z","capacity":1},{"branchId":"BRANCH_ID","serviceTypeId":"SERVICE_TYPE_ID","startTime":"2026-03-10T09:15:00.000Z","endTime":"2026-03-10T09:30:00.000Z","capacity":1}]'
 ```
@@ -196,7 +196,7 @@ Create multiple slots with an array payload on `POST /api/slots`:
 
 ```bash
 curl -X POST http://localhost:3000/api/slots \
-  -u admin@flowcare.com:admin123 \
+  -u admin@flowcare.com:YOUR_ADMIN_PASSWORD \
   -H "Content-Type: application/json" \
   -d '[{"branchId":"BRANCH_ID","serviceTypeId":"SERVICE_TYPE_ID","startTime":"2026-03-10T09:00:00.000Z","endTime":"2026-03-10T09:15:00.000Z","capacity":1},{"branchId":"BRANCH_ID","serviceTypeId":"SERVICE_TYPE_ID","startTime":"2026-03-10T09:15:00.000Z","endTime":"2026-03-10T09:30:00.000Z","capacity":1}]'
 ```
@@ -205,7 +205,7 @@ Cleanup example:
 
 ```bash
 curl -X POST http://localhost:3000/api/slots/cleanup-retention \
-  -u admin@flowcare.com:admin123
+  -u admin@flowcare.com:YOUR_ADMIN_PASSWORD
 ```
 
 Retention cleanup behavior:
@@ -221,7 +221,7 @@ Assign staff to a slot:
 
 ```bash
 curl -X POST http://localhost:3000/api/slots/SLOT_ID/assign-staff \
-  -u admin@flowcare.com:admin123 \
+  -u admin@flowcare.com:YOUR_ADMIN_PASSWORD \
   -H "Content-Type: application/json" \
   -d '{"staffId":"STAFF_ID"}'
 ```
@@ -284,7 +284,7 @@ Each audit record includes an `actorRole` field that snapshots the role of the u
 Audit export:
 
 ```bash
-curl -u admin@flowcare.com:admin123 \
+curl -u admin@flowcare.com:YOUR_ADMIN_PASSWORD \
   http://localhost:3000/api/audit/export \
   -o audit-logs.csv
 ```
@@ -300,7 +300,7 @@ Example:
 
 ```bash
 curl -X PUT http://localhost:3000/api/retention-config \
-  -u admin@flowcare.com:admin123 \
+  -u admin@flowcare.com:YOUR_ADMIN_PASSWORD \
   -H "Content-Type: application/json" \
   -d '{"branchId":"BRANCH_ID","retentionDays":45}'
 ```

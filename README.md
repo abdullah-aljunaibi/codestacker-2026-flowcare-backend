@@ -58,20 +58,22 @@ The app bootstraps seed data automatically on startup. You can also regenerate P
 ## Default Admin Credentials
 
 - Email: `admin@flowcare.com`
-- Password: `admin123`
+- Password: `YOUR_ADMIN_PASSWORD`
+
+> ⚠️ **Security Note:** Change the default admin password before any public deployment. The seed data uses a placeholder — set a strong password via environment variable or direct edit before going live.
 
 ## Basic Authentication
 
 Use curl's `-u` flag on protected routes:
 
 ```bash
-curl -u admin@flowcare.com:admin123 http://localhost:3000/api/audit
+curl -u admin@flowcare.com:YOUR_ADMIN_PASSWORD http://localhost:3000/api/audit
 ```
 
 You can also validate credentials explicitly:
 
 ```bash
-curl -X POST -u admin@flowcare.com:admin123 http://localhost:3000/api/auth/login
+curl -X POST -u admin@flowcare.com:YOUR_ADMIN_PASSWORD http://localhost:3000/api/auth/login
 ```
 
 ## API Quick Examples
@@ -118,7 +120,7 @@ curl -u manager.mct-001@flowcare.com:password123 \
 List admin slots including soft-deleted rows:
 
 ```bash
-curl -u admin@flowcare.com:admin123 \
+curl -u admin@flowcare.com:YOUR_ADMIN_PASSWORD \
   "http://localhost:3000/api/slots/admin-view?includeDeleted=true"
 ```
 
@@ -185,7 +187,7 @@ Create one slot:
 
 ```bash
 curl -X POST http://localhost:3000/api/slots \
-  -u admin@flowcare.com:admin123 \
+  -u admin@flowcare.com:YOUR_ADMIN_PASSWORD \
   -H "Content-Type: application/json" \
   -d '{"branchId":"BRANCH_ID","serviceTypeId":"SERVICE_TYPE_ID","startTime":"2026-03-10T09:00:00.000Z","endTime":"2026-03-10T09:15:00.000Z","capacity":1}'
 ```
@@ -194,7 +196,7 @@ Bulk create slots:
 
 ```bash
 curl -X POST http://localhost:3000/api/slots/bulk \
-  -u admin@flowcare.com:admin123 \
+  -u admin@flowcare.com:YOUR_ADMIN_PASSWORD \
   -H "Content-Type: application/json" \
   -d '[{"branchId":"BRANCH_ID","serviceTypeId":"SERVICE_TYPE_ID","startTime":"2026-03-10T09:00:00.000Z","endTime":"2026-03-10T09:15:00.000Z","capacity":1},{"branchId":"BRANCH_ID","serviceTypeId":"SERVICE_TYPE_ID","startTime":"2026-03-10T09:15:00.000Z","endTime":"2026-03-10T09:30:00.000Z","capacity":1}]'
 ```
@@ -214,7 +216,7 @@ Set branch retention configuration as admin:
 
 ```bash
 curl -X PUT http://localhost:3000/api/retention-config \
-  -u admin@flowcare.com:admin123 \
+  -u admin@flowcare.com:YOUR_ADMIN_PASSWORD \
   -H "Content-Type: application/json" \
   -d '{"branchId":"BRANCH_ID","retentionDays":45}'
 ```
@@ -223,7 +225,7 @@ Run retention cleanup:
 
 ```bash
 curl -X POST http://localhost:3000/api/slots/cleanup-retention \
-  -u admin@flowcare.com:admin123
+  -u admin@flowcare.com:YOUR_ADMIN_PASSWORD
 ```
 
 Retention cleanup is relation-safe and idempotent. It only hard-deletes slots whose `deletedAt` is older than the effective DB-backed retention window, removes related `SlotAssignment` rows, nulls `Appointment.slotId` for historical appointments, preserves prior soft-delete audit rows, and records a `SLOT_HARD_DELETED` audit event for each deleted slot. Running it again immediately is a no-op.
@@ -232,7 +234,7 @@ Assign staff to a slot:
 
 ```bash
 curl -X POST http://localhost:3000/api/slots/SLOT_ID/assign-staff \
-  -u admin@flowcare.com:admin123 \
+  -u admin@flowcare.com:YOUR_ADMIN_PASSWORD \
   -H "Content-Type: application/json" \
   -d '{"staffId":"STAFF_ID"}'
 ```
@@ -248,7 +250,7 @@ Assign staff to a service type:
 
 ```bash
 curl -X POST http://localhost:3000/api/service-types/SERVICE_TYPE_ID/assign-staff \
-  -u admin@flowcare.com:admin123 \
+  -u admin@flowcare.com:YOUR_ADMIN_PASSWORD \
   -H "Content-Type: application/json" \
   -d '{"staffId":"STAFF_ID","branchId":"BRANCH_ID"}'
 ```
@@ -256,7 +258,7 @@ curl -X POST http://localhost:3000/api/service-types/SERVICE_TYPE_ID/assign-staf
 List staff assigned to a service type:
 
 ```bash
-curl -u admin@flowcare.com:admin123 \
+curl -u admin@flowcare.com:YOUR_ADMIN_PASSWORD \
   http://localhost:3000/api/service-types/SERVICE_TYPE_ID/staff
 ```
 
@@ -264,13 +266,13 @@ Remove staff from a service type:
 
 ```bash
 curl -X DELETE http://localhost:3000/api/service-types/SERVICE_TYPE_ID/assign-staff/STAFF_ID \
-  -u admin@flowcare.com:admin123
+  -u admin@flowcare.com:YOUR_ADMIN_PASSWORD
 ```
 
 Export audit logs:
 
 ```bash
-curl -u admin@flowcare.com:admin123 \
+curl -u admin@flowcare.com:YOUR_ADMIN_PASSWORD \
   http://localhost:3000/api/audit/export \
   -o audit-logs.csv
 ```
